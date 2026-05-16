@@ -3,10 +3,53 @@ import pickle
 import datasets
 import random
 import transformers
+import urllib.request
+from pathlib import Path
+
+
+C4_TRAIN_URL = "https://huggingface.co/datasets/allenai/c4/resolve/main/en/c4-train.00000-of-01024.json.gz"
+C4_VALIDATION_URL = "https://huggingface.co/datasets/allenai/c4/resolve/main/en/c4-validation.00000-of-00008.json.gz"
+C4_TRAIN_FILE = "c4-train.00000-of-01024.json.gz"
+C4_VALIDATION_FILE = "c4-validation.00000-of-00008.json.gz"
+
 
 class TokenizerWrapper:
     def __init__(self, input_ids):
         self.input_ids = input_ids
+
+
+def _hf_token():
+    return os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_HUB_TOKEN")
+
+
+def _download_file(url, path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > 0:
+        return str(path)
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    request = urllib.request.Request(url)
+    token = _hf_token()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+
+    print(f"Downloading C4 shard to {path}...")
+    with urllib.request.urlopen(request) as response, open(tmp_path, "wb") as handle:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            handle.write(chunk)
+    tmp_path.replace(path)
+    return str(path)
+
+
+def _c4_local_file(eval_mode=False):
+    cache_dir = Path(os.getenv("C4_CACHE_DIR", "./data/cache/c4"))
+    filename = C4_VALIDATION_FILE if eval_mode else C4_TRAIN_FILE
+    url = C4_VALIDATION_URL if eval_mode else C4_TRAIN_URL
+    return _download_file(url, cache_dir / filename)
 
 
 def get_wikitext2(nsamples, seqlen, tokenizer, eval_mode=False):
@@ -31,30 +74,50 @@ def get_wikitext2(nsamples, seqlen, tokenizer, eval_mode=False):
 
 
 def get_c4_new(nsamples, seqlen, tokenizer, eval_mode=False):
+    split = "validation" if eval_mode else "train"
+    data_file = _c4_local_file(eval_mode)
+    dataset = datasets.load_dataset(
+        "json",
+        data_files={split: data_file},
+        split=split,
+        streaming=True,
+    )
+
     if eval_mode:
-        valdata = datasets.load_dataset(
-        './datasets/allenai/c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation')
-        valenc = tokenizer(' '.join(valdata[:1100]['text']), return_tensors='pt')
+        texts = []
+        for item in dataset:
+            text = item.get("text", "").strip()
+            if not text:
+                continue
+            texts.append(text)
+            if len(texts) >= 1100:
+                break
+        valenc = tokenizer(' '.join(texts), return_tensors='pt')
         valenc = valenc.input_ids[:, :(256 * seqlen)]
         valenc = TokenizerWrapper(valenc)
         return valenc
-    else:
-        traindata = datasets.load_dataset(
-            './datasets/allenai/c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train')
-        trainloader = []
-        for _ in range(nsamples):
-            while True:
-                i = random.randint(0, len(traindata) - 1)
-                trainenc = tokenizer(traindata[i]['text'], return_tensors='pt')
-                if trainenc.input_ids.shape[1] >= seqlen:
-                    break
-            i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
-            j = i + seqlen
-            inp = trainenc.input_ids[:, i:j]
-            tar = inp.clone()
-            tar[:, :-1] = -100
-            trainloader.append((inp, tar))
-        return trainloader
+
+    trainloader = []
+    for item in dataset:
+        text = item.get("text", "").strip()
+        if not text:
+            continue
+        trainenc = tokenizer(text, return_tensors='pt')
+        if trainenc.input_ids.shape[1] < seqlen:
+            continue
+        max_start = trainenc.input_ids.shape[1] - seqlen
+        start = random.randint(0, max_start)
+        end = start + seqlen
+        inp = trainenc.input_ids[:, start:end]
+        tar = inp.clone()
+        tar[:, :-1] = -100
+        trainloader.append((inp, tar))
+        if len(trainloader) >= nsamples:
+            break
+
+    if len(trainloader) < nsamples:
+        raise RuntimeError(f"Unable to collect {nsamples} C4 samples; only found {len(trainloader)} usable documents")
+    return trainloader
 
 
 def get_ptb_new(nsamples, seqlen, tokenizer, eval_mode=False):

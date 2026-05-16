@@ -157,6 +157,27 @@ def resolve_model_reference(model_ref: str, models_root: str = "/models") -> str
     return model_ref
 
 
+def load_tokenizer_compat(model_ref: str, hf_token: str | None, *, prefer_fast: bool = True):
+    kwargs = {
+        "trust_remote_code": True,
+        "use_fast": prefer_fast,
+    }
+    if hf_token:
+        kwargs["token"] = hf_token
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_ref, **kwargs)
+    except TypeError:
+        kwargs.pop("token", None)
+        if hf_token:
+            kwargs["use_auth_token"] = hf_token
+        tokenizer = AutoTokenizer.from_pretrained(model_ref, **kwargs)
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
 def run_perplexity_evaluation(args, model_paths: dict[str, str]) -> dict:
     evaluator = SlidingWindowEvaluator(
         device="cuda" if torch.cuda.is_available() else "cpu",
@@ -330,11 +351,9 @@ def run_quantize(args):
         from flatquant import model_utils as fq_model_utils
         model, _apply_fn = fq_model_utils.get_model(resolved_model, hf_token)
         model.eval()
-        tokenizer = AutoTokenizer.from_pretrained(resolved_model, use_fast=False, use_auth_token=hf_token)
+        tokenizer = load_tokenizer_compat(resolved_model, hf_token, prefer_fast=True)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(resolved_model, trust_remote_code=True, token=hf_token)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = load_tokenizer_compat(resolved_model, hf_token, prefer_fast=True)
 
         model_kwargs = {
             "torch_dtype": torch.bfloat16,

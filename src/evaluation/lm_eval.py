@@ -4,7 +4,10 @@ lm-evaluation-harness integration for downstream benchmark evaluation.
 
 from __future__ import annotations
 
+import copy
 import json
+import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -81,14 +84,62 @@ class LMEvalHarnessRunner:
         safe_payload = self._make_json_safe(payload)
         dump_json(output_path, safe_payload, indent=2)
 
-    def evaluate_model(self, model_name: str, model_path) -> dict:
-        try:
-            from lm_eval import evaluator
-        except ImportError as exc:
-            raise RuntimeError(
-                "lm-eval is not installed. Install the 'lm-eval' package or disable lm-eval with --no-lm-eval."
-            ) from exc
+    def _clear_isolated_hf_datasets_cache(self):
+        cache_dir = os.getenv("HF_DATASETS_CACHE")
+        if not cache_dir:
+            return False
+        path = Path(cache_dir)
+        normalized_parts = {part.lower() for part in path.parts}
+        if not (path.name.startswith("datasets-") and "hf_datasets" in normalized_parts):
+            return False
+        shutil.rmtree(path, ignore_errors=True)
+        path.mkdir(parents=True, exist_ok=True)
+        print(f"\nDetected incomplete HF datasets cache, cleared {path} and retrying lm-eval once...")
+        return True
 
+    @staticmethod
+    def _is_incompatible_hf_cache_type_error(exc: TypeError) -> bool:
+        return "must be called with a dataclass type or instance" in str(exc)
+
+    def _augment_incompatible_hf_cache_error(self, exc: TypeError) -> RuntimeError | TypeError:
+        if not self._is_incompatible_hf_cache_type_error(exc):
+            return exc
+        return RuntimeError(
+            "lm-eval failed because the Hugging Face datasets cache is incompatible with "
+            "the current `datasets` package. This is a dataset-cache problem, not a "
+            "quantization/model problem. Clear the isolated HF datasets cache and rerun."
+        )
+
+    @staticmethod
+    def _is_missing_hf_cache_error(exc: ValueError) -> bool:
+        message = str(exc)
+        return "Couldn't find cache for" in message and "Available configs in the cache" in message
+
+    def _augment_missing_hf_cache_error(self, exc: ValueError) -> RuntimeError | ValueError:
+        if not self._is_missing_hf_cache_error(exc):
+            return exc
+        return RuntimeError(
+            "lm-eval failed because the Hugging Face datasets cache is incomplete. "
+            f"Original error: {exc}. "
+            "Clear the isolated HF datasets cache and rerun, or prefetch both ARC configs "
+            "`ARC-Challenge` and `ARC-Easy`. Also make sure `HF_DATASETS_OFFLINE` is not `1`."
+        )
+
+    @staticmethod
+    def _is_unreachable_hub_error(exc: Exception) -> bool:
+        message = str(exc)
+        return "Couldn't reach" in message and "on the Hub" in message
+
+    @staticmethod
+    def _is_dataset_probe_unicode_error(exc: Exception) -> bool:
+        return isinstance(exc, UnicodeDecodeError)
+
+    def _is_recoverable_dataset_error(self, exc: Exception) -> bool:
+        return (
+            isinstance(exc, ValueError) and self._is_missing_hf_cache_error(exc)
+        ) or self._is_unreachable_hub_error(exc) or self._is_dataset_probe_unicode_error(exc)
+
+    def _run_simple_evaluate(self, evaluator, model_name: str, model_path):
         if isinstance(model_path, dict) and {"model", "tokenizer"}.issubset(model_path):
             from lm_eval.models.huggingface import HFLM
 
@@ -98,7 +149,7 @@ class LMEvalHarnessRunner:
                 model = model.to(self.device)
             eval_batch_size = 1 if self.batch_size == "auto" else self.batch_size
             hflm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=eval_batch_size)
-            payload = evaluator.simple_evaluate(
+            return evaluator.simple_evaluate(
                 model=hflm,
                 tasks=self.tasks,
                 device=self.device,
@@ -106,16 +157,124 @@ class LMEvalHarnessRunner:
                 num_fewshot=self.num_fewshot,
                 log_samples=False,
             )
-        else:
-            payload = evaluator.simple_evaluate(
-                model="hf",
-                model_args=self._model_args(model_path),
-                tasks=self.tasks,
-                device=self.device,
-                batch_size=self.batch_size,
-                num_fewshot=self.num_fewshot,
-                log_samples=False,
+
+        return evaluator.simple_evaluate(
+            model="hf",
+            model_args=self._model_args(model_path),
+            tasks=self.tasks,
+            device=self.device,
+            batch_size=self.batch_size,
+            num_fewshot=self.num_fewshot,
+            log_samples=False,
+        )
+
+    def _run_one_task(self, evaluator, model_name: str, model_path, task: str):
+        original_tasks = self.tasks
+        try:
+            self.tasks = [task]
+            return self._run_simple_evaluate(evaluator, model_name, model_path)
+        finally:
+            self.tasks = original_tasks
+
+    def _run_taskwise_best_effort(self, evaluator, model_name: str, model_path):
+        merged_payload = None
+        skipped = {}
+
+        for task in self.tasks:
+            try:
+                task_payload = self._run_one_task(evaluator, model_name, model_path, task)
+            except Exception as exc:
+                if self._is_recoverable_dataset_error(exc):
+                    skipped[task] = str(exc)
+                    print(f"\nSkipping lm-eval task {task}: {exc}")
+                    continue
+                raise
+
+            if merged_payload is None:
+                merged_payload = task_payload
+            else:
+                for key in ("results", "configs", "versions", "n-shot"):
+                    if isinstance(task_payload.get(key), dict):
+                        merged_payload.setdefault(key, {}).update(task_payload[key])
+                if isinstance(task_payload.get("samples"), dict):
+                    merged_payload.setdefault("samples", {}).update(task_payload["samples"])
+
+        if merged_payload is None:
+            raise RuntimeError(
+                "All lm-eval tasks failed because the Hugging Face Hub is unreachable "
+                "and the required datasets are not fully cached. "
+                f"Skipped tasks: {skipped}"
             )
+
+        merged_payload = copy.deepcopy(merged_payload)
+        merged_payload["skipped_tasks"] = skipped
+        return merged_payload
+
+    def evaluate_model(self, model_name: str, model_path) -> dict:
+        try:
+            from lm_eval import evaluator
+        except ImportError as exc:
+            raise RuntimeError(
+                "lm-eval is not installed. Install the 'lm-eval' package or disable lm-eval with --no-lm-eval."
+            ) from exc
+
+        try:
+            payload = self._run_simple_evaluate(evaluator, model_name, model_path)
+        except ValueError as exc:
+            if self._is_dataset_probe_unicode_error(exc):
+                if self._clear_isolated_hf_datasets_cache():
+                    try:
+                        payload = self._run_simple_evaluate(evaluator, model_name, model_path)
+                    except ValueError as retry_exc:
+                        if self._is_dataset_probe_unicode_error(retry_exc):
+                            payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+                        else:
+                            raise self._augment_missing_hf_cache_error(retry_exc) from retry_exc
+                    except TypeError as retry_exc:
+                        raise self._augment_incompatible_hf_cache_error(retry_exc) from retry_exc
+                else:
+                    payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+            if self._is_missing_hf_cache_error(exc) and self._clear_isolated_hf_datasets_cache():
+                try:
+                    payload = self._run_simple_evaluate(evaluator, model_name, model_path)
+                except ValueError as retry_exc:
+                    if self._is_dataset_probe_unicode_error(retry_exc):
+                        payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+                    elif self._is_missing_hf_cache_error(retry_exc):
+                        payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+                    else:
+                        raise self._augment_missing_hf_cache_error(retry_exc) from retry_exc
+                except TypeError as retry_exc:
+                    raise self._augment_incompatible_hf_cache_error(retry_exc) from retry_exc
+                except UnicodeDecodeError:
+                    payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+            elif not self._is_dataset_probe_unicode_error(exc):
+                raise self._augment_missing_hf_cache_error(exc) from exc
+        except TypeError as exc:
+            if self._is_incompatible_hf_cache_type_error(exc) and self._clear_isolated_hf_datasets_cache():
+                try:
+                    payload = self._run_simple_evaluate(evaluator, model_name, model_path)
+                except TypeError as retry_exc:
+                    raise self._augment_incompatible_hf_cache_error(retry_exc) from retry_exc
+                except ValueError as retry_exc:
+                    raise self._augment_missing_hf_cache_error(retry_exc) from retry_exc
+                except UnicodeDecodeError:
+                    payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+            else:
+                raise self._augment_incompatible_hf_cache_error(exc) from exc
+        except UnicodeDecodeError as exc:
+            if self._clear_isolated_hf_datasets_cache():
+                try:
+                    payload = self._run_simple_evaluate(evaluator, model_name, model_path)
+                except UnicodeDecodeError:
+                    payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+            else:
+                payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+        except Exception as exc:
+            if self._is_recoverable_dataset_error(exc):
+                payload = self._run_taskwise_best_effort(evaluator, model_name, model_path)
+            else:
+                raise
         safe_payload = self._make_json_safe(payload)
         self._write_raw_results(model_name, payload)
         return {

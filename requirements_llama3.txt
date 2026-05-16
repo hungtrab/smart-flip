@@ -2,5 +2,15 @@
 transformers==4.36.0
 lm-eval==0.4.4
 peft==0.13.2
-
-# tokenizers 0.15.2
+datasets==2.17.1
+accelerate
+huggingface_hub
+sentencepiece
+tiktoken
+protobuf
+safetensors
+tqdm
+psutil
+wandb
+python-dotenv
+numpy
