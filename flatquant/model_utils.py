@@ -12,15 +12,23 @@ def skip_initialization():
     torch.nn.init.normal_ = skip
 
 
+def _hf_auth_kwargs(hf_token):
+    if not hf_token:
+        return {}
+    return {"token": hf_token}
+
+
 def get_llama(model_name, hf_token):
     skip_initialization()
-    config = transformers.LlamaConfig.from_pretrained(model_name)
+    config = transformers.LlamaConfig.from_pretrained(model_name, **_hf_auth_kwargs(hf_token))
     config._attn_implementation_internal = "eager"
-    model = transformers.LlamaForCausalLM.from_pretrained(model_name,
-                                                          torch_dtype='auto',
-                                                          config=config,
-                                                          use_auth_token=hf_token,
-                                                          low_cpu_mem_usage=True)
+    model = transformers.LlamaForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype='auto',
+        config=config,
+        low_cpu_mem_usage=True,
+        **_hf_auth_kwargs(hf_token),
+    )
     model.seqlen = 2048
     logging.info(f'---> Loading {model_name} Model with seq_len: {model.seqlen}')
     return model, apply_flatquant_to_llama
@@ -28,13 +36,15 @@ def get_llama(model_name, hf_token):
 
 def get_llama_31(model_name, hf_token):
     skip_initialization()
-    config = transformers.LlamaConfig.from_pretrained(model_name)
+    config = transformers.LlamaConfig.from_pretrained(model_name, **_hf_auth_kwargs(hf_token))
     config._attn_implementation_internal = "eager"
-    model = transformers.LlamaForCausalLM.from_pretrained(model_name,
-                                                          torch_dtype='auto',
-                                                          config=config,
-                                                          use_auth_token=hf_token,
-                                                          low_cpu_mem_usage=True)
+    model = transformers.LlamaForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype='auto',
+        config=config,
+        low_cpu_mem_usage=True,
+        **_hf_auth_kwargs(hf_token),
+    )
     model.seqlen = 2048
     logging.info(f'---> Loading {model_name} Model with seq_len: {model.seqlen}')
     return model, apply_flatquant_to_llama_31
@@ -48,13 +58,15 @@ def get_qwen2(model_name, hf_token):
         logging.error("Qwen2 model is not available in this version of 'transformers'. Please update the library.")
         raise ImportError("Qwen2 model is not available. Ensure you're using a compatible version of the 'transformers' library.")
 
-    config = transformers.Qwen2Config.from_pretrained(model_name)
+    config = transformers.Qwen2Config.from_pretrained(model_name, **_hf_auth_kwargs(hf_token))
     config._attn_implementation_internal = "eager"
-    model = Qwen2ForCausalLM.from_pretrained(model_name,
-                                                          torch_dtype='auto',
-                                                          config=config,
-                                                          use_auth_token=hf_token,
-                                                          low_cpu_mem_usage=True)
+    model = Qwen2ForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype='auto',
+        config=config,
+        low_cpu_mem_usage=True,
+        **_hf_auth_kwargs(hf_token),
+    )
     model.seqlen = 2048
     logging.info(f'---> Loading {model_name} Model with seq_len: {model.seqlen}')
 
@@ -70,14 +82,14 @@ def get_mistral(model_name, hf_token):
         logging.error("Mistral model is not available in this version of 'transformers'. Please update the library.")
         raise ImportError("Mistral model is not available. Ensure you're using a compatible version of the 'transformers' library.")
 
-    config = MistralConfig.from_pretrained(model_name)
+    config = MistralConfig.from_pretrained(model_name, **_hf_auth_kwargs(hf_token))
     config._attn_implementation_internal = "eager"
     model = MistralForCausalLM.from_pretrained(
         model_name,
         torch_dtype='auto',
         config=config,
-        use_auth_token=hf_token,
         low_cpu_mem_usage=True,
+        **_hf_auth_kwargs(hf_token),
     )
     model.seqlen = 2048
     logging.info(f'---> Loading {model_name} Model with seq_len: {model.seqlen}')
@@ -109,4 +121,3 @@ def get_model(model_name, hf_token=None):
         return get_mistral(model_name, hf_token)
     else:
         raise ValueError(f'Unknown model {model_name}')
-

@@ -1,3 +1,4 @@
+import inspect
 import math
 
 import torch
@@ -10,7 +11,7 @@ from flatquant.trans_utils import SVDSingleTransMatrix, SVDDecomposeTransMatrix
 from flatquant.trans_utils import InvSingleTransMatrix, InvDecomposeTransMatrix
 from flatquant.flat_linear import FlatQuantizedLinear
 
-from transformers.models.llama.modeling_llama import LlamaMLP, LlamaAttention, \
+from transformers.models.llama.modeling_llama import LlamaMLP, LlamaAttention, LlamaRotaryEmbedding, \
                                                      apply_rotary_pos_emb, repeat_kv
 
 
@@ -110,9 +111,61 @@ class FlatQuantLlamaMLP(LlamaMLP):
 
 
 class FlatQuantLlamaAttention(LlamaAttention):
+    @staticmethod
+    def _build_rotary_embedding(module):
+        config = module.config
+        device = module.q_proj.weight.device
+        attempts = [
+            lambda: LlamaRotaryEmbedding(config=config, device=device),
+            lambda: LlamaRotaryEmbedding(config=config),
+            lambda: LlamaRotaryEmbedding(config, device=device),
+            lambda: LlamaRotaryEmbedding(config),
+        ]
+        last_error = None
+        for attempt in attempts:
+            try:
+                return attempt()
+            except (TypeError, AttributeError) as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unable to construct LlamaRotaryEmbedding")
+
+    def _compute_position_embeddings(self, value_states, position_ids):
+        if not hasattr(self, "rotary_emb"):
+            raise AttributeError("FlatQuantLlamaAttention has no rotary_emb fallback")
+
+        attempts = [
+            lambda: self.rotary_emb(value_states, position_ids),
+            lambda: self.rotary_emb(value_states, position_ids=position_ids),
+            lambda: self.rotary_emb(position_ids=position_ids, x=value_states),
+        ]
+        last_error = None
+        for attempt in attempts:
+            try:
+                return attempt()
+            except TypeError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unable to compute Llama rotary position embeddings")
+
     def __init__(self, args, module: LlamaAttention):
         super().__init__(module.config, module.layer_idx)
         self.args = args
+        self._use_position_embeddings_api = "position_embeddings" in inspect.signature(module.forward).parameters
+        self.hidden_size = getattr(module, "hidden_size", module.config.hidden_size)
+        self.num_heads = getattr(module, "num_heads", getattr(module, "num_attention_heads", module.config.num_attention_heads))
+        self.num_key_value_heads = getattr(module, "num_key_value_heads", module.config.num_key_value_heads)
+        self.head_dim = getattr(module, "head_dim", getattr(module.config, "head_dim", self.hidden_size // self.num_heads))
+        self.num_key_value_groups = getattr(module, "num_key_value_groups", self.num_heads // self.num_key_value_heads)
+        self.scaling = getattr(module, "scaling", self.head_dim ** -0.5)
+        self.attention_dropout = getattr(module, "attention_dropout", getattr(module.config, "attention_dropout", 0.0))
+        self.is_causal = getattr(module, "is_causal", True)
+        if hasattr(module, "rotary_emb"):
+            self.rotary_emb = module.rotary_emb
+        else:
+            self.rotary_emb = self._build_rotary_embedding(module)
         
         self.q_proj = FlatQuantizedLinear(args, module.q_proj)
         self.k_proj = FlatQuantizedLinear(args, module.k_proj)
@@ -199,8 +252,20 @@ class FlatQuantLlamaAttention(LlamaAttention):
             k = self.k_cache_quantizer(k).to(q)
         return q, k
 
-    def forward(self, hidden_states, attention_mask, position_ids,
-                    past_key_value, output_attentions, use_cache, **kwargs):
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        position_ids=None,
+        past_key_value=None,
+        output_attentions=False,
+        use_cache=False,
+        cache_position=None,
+        position_embeddings=None,
+        past_key_values=None,
+        **kwargs,
+    ):
+        cache_obj = past_key_values if past_key_values is not None else past_key_value
         bsz, q_len, _ = hidden_states.size()
         if self._ori_mode:
             query_states, key_states, value_states = self._ori_forward_after_ln(hidden_states)
@@ -211,42 +276,27 @@ class FlatQuantLlamaAttention(LlamaAttention):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        if position_embeddings is None:
+            cos, sin = self._compute_position_embeddings(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
         # ---- here do the quantization ----
         if not self._ori_mode:
             query_states, key_states = self.quant_kcache(query_states, key_states)
             value_states = self.quant_vcache(value_states)
 
-        if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        if cache_obj is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = cache_obj.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups) # bnsh
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
         if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-            attn_weights = attn_weights + attention_mask
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
@@ -260,7 +310,7 @@ class FlatQuantLlamaAttention(LlamaAttention):
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        attn_output = attn_output.reshape(bsz, q_len, -1)
         if self._ori_mode:
             attn_output = self.o_proj._ori_forward(attn_output)
         else:
@@ -283,7 +333,7 @@ class FlatQuantLlamaAttention(LlamaAttention):
                     attn_output = self.o_proj(attn_output)
         if not output_attentions:
             attn_weights = None
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights, cache_obj
 
     def reparameterize(self):
         if self.ln_trans is not None:

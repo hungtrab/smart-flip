@@ -1,0 +1,16 @@
+# Compatibility environment for Llama 2 / Llama 3 experiments.
+# This env is intentionally more conservative than the general one:
+# - `lm-eval==0.4.1` accepts `datasets>=2.14`
+# - `datasets==2.14.6` avoids the UnicodeDecodeError seen in newer 2.17/2.18
+#   releases for some hub datasets
+# - `pyarrow<21` avoids the `PyExtensionType` removal that breaks older
+#   `datasets` releases on fresh installs
+transformers==4.36.0
+tokenizers==0.15.2
+datasets==2.14.6
+pyarrow==20.0.0
+accelerate==0.34.2
+lm-eval==0.4.1
+peft==0.13.2
+huggingface-hub==0.24.6
+sentencepiece

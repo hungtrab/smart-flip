@@ -1,0 +1,131 @@
+Colab setup guide for smart-flip +BC resume
+===========================================
+
+Goal
+----
+Use this when Colab has a broken venv where `pip` is missing, or when
+`pip install ...` goes to `/usr/local/bin/pip` instead of the repo venv.
+
+Expected repo path in Colab
+---------------------------
+/content/smart-flip
+
+1. Clone or enter repo
+----------------------
+If the repo is already present:
+
+  cd /content/smart-flip
+
+If you need to clone:
+
+  cd /content
+  git clone <YOUR_REPO_URL> smart-flip
+  cd /content/smart-flip
+
+2. Create or repair venv
+------------------------
+Create a fresh venv:
+
+  python3 -m venv .venv
+  source .venv/bin/activate
+
+If `python -m pip` says "No module named pip", bootstrap pip with get-pip:
+
+  curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+  python /tmp/get-pip.py
+
+Then verify pip belongs to the venv:
+
+  which python
+  python -c "import sys; print(sys.executable)"
+  python -m pip --version
+
+The python path should look like:
+
+  /content/smart-flip/.venv/bin/python
+
+3. Install dependencies
+-----------------------
+Install with `python -m pip`, not plain `pip`:
+
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install -r requirements.txt
+  python -m pip install numpy safetensors sentencepiece protobuf tiktoken pyarrow
+
+Verify imports:
+
+  python - <<'PY'
+  import numpy, torch, datasets, transformers, lm_eval, wandb
+  print("numpy", numpy.__version__, numpy.__file__)
+  print("torch", torch.__version__, "cuda", torch.cuda.is_available())
+  if torch.cuda.is_available():
+      print(torch.cuda.get_device_name(0))
+  PY
+
+4. Patch files from notebook
+----------------------------
+Open `colab/run.ipynb` in Colab and run cells top to bottom.
+The notebook uses:
+
+  %%writefile smart-flip/<path>
+
+so it writes directly into `/content/smart-flip`.
+
+5. Run resume for remaining +BC
+-------------------------------
+From `/content`, run:
+
+  cd /content/smart-flip
+  source .venv/bin/activate
+
+  PYTHON_BIN=/content/smart-flip/.venv/bin/python \
+  WANDB_PROJECT=egbc_c4_b3 GPU=0 \
+  bash scripts/bash/egbc_c4_b3_resume_bc_extra_from_llama.sh
+
+This resumes only:
+
+  - llama31_fq_bc
+  - llama3_fq_bc
+
+and skips a worker if its expected JSON already exists.
+
+6. Tune Llama3 FlatQuant + EGBC
+-------------------------------
+For the Llama3 EGBC tuning grid:
+
+  KNEE_VALUES=(0.0 0.01 0.02 0.03 0.04 0.05)
+  MAX_FLIP_VALUES=(0.01 0.02 0.03 0.04 0.05)
+
+run from the isolated Llama3 repo:
+
+  cd /content/smart-flip/for_llama3/smart-flip
+  source .venv/bin/activate
+
+  PYTHON_BIN=/content/smart-flip/for_llama3/smart-flip/.venv/bin/python \
+  WANDB_PROJECT=egbc_tune_llama3_b3 GPU=0 \
+  bash scripts/bash/llama3_flatquant_b3_tune_egbc.sh
+
+The script runs 30 FlatQuant + EGBC configs. By default it uses the 5 target
+lm-eval tasks and no C4, matching the earlier tuning setup. Set INCLUDE_C4=1
+only if you intentionally want C4 during tuning.
+
+7. If Hugging Face dataset cache fails
+--------------------------------------
+Prefer reusing the cache that already worked. If you intentionally use a new
+cache, make sure the machine can reach Hugging Face Hub before running lm-eval.
+
+To inspect cache variables:
+
+  echo "$HF_HOME"
+  echo "$HF_DATASETS_CACHE"
+
+To avoid offline mode:
+
+  unset HF_DATASETS_OFFLINE
+  unset TRANSFORMERS_OFFLINE
+
+
+curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+python /tmp/get-pip.py
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt

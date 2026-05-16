@@ -38,7 +38,7 @@ def build_awq_config(args) -> AWQConfig:
 def build_flatquant_config(args) -> FlatQuantConfig:
     return FlatQuantConfig(
         w_bits=args.bits,
-        a_bits=4,
+        a_bits=args.flatquant_a_bits,
         q_bits=16,
         k_bits=16,
         v_bits=16,
@@ -137,4 +137,3 @@ def create_quantizer(model, tokenizer, device: str, args, recipe: QuantizationRe
         return quantizer, config, correction
 
     raise NotImplementedError(f"Unsupported origin method: {recipe.origin_method}")
-

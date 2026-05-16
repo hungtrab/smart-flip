@@ -111,6 +111,7 @@ RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
 RAW_MODEL_DIR="${RAW_MODEL_DIR:-${RESULTS_MODELS_DIR}/${ORIGIN_METHOD}_raw/${RAW_RUN_NAME}}"
 CORR_RUN_NAME="${CORR_RUN_NAME:-${ORIGIN_METHOD}_bias_correction_${MODEL_SLUG}}"
 BIAS_CORRECTION_SAMPLES="${BIAS_CORRECTION_SAMPLES:-4096}"
+BITS="${BITS:-4}"
 
 if [ "$RUN_FLOAT_MODEL" = "1" ]; then
   echo "==> float_model :: ${MODEL_PATH}"
@@ -126,7 +127,7 @@ if [ "$RUN_RAW_QUANTIZE" = "1" ]; then
     --origin-method "$ORIGIN_METHOD"
     --post-correction none
     --run-name "$RAW_RUN_NAME"
-    --bits "4"
+    --bits "$BITS"
   )
   add_gptq_args RAW_ARGS
   "$PYTHON_BIN" main.py quantize "${RAW_ARGS[@]}"
@@ -146,7 +147,7 @@ CORR_ARGS=(
   --bias-correction-samples "$BIAS_CORRECTION_SAMPLES"
   --gptq-raw-path "$RAW_MODEL_DIR"
   --run-name "$CORR_RUN_NAME"
-  --bits "4"
+  --bits "$BITS"
 )
 add_gptq_args CORR_ARGS
 "$PYTHON_BIN" main.py quantize "${CORR_ARGS[@]}"

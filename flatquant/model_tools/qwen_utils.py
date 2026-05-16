@@ -1,3 +1,4 @@
+import inspect
 import math
 
 import torch
@@ -10,7 +11,7 @@ from flatquant.trans_utils import SVDSingleTransMatrix, SVDDecomposeTransMatrix
 from flatquant.trans_utils import InvSingleTransMatrix, InvDecomposeTransMatrix
 from flatquant.flat_linear import FlatQuantizedLinear
 
-from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP, Qwen2Attention, \
+from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP, Qwen2Attention, Qwen2RotaryEmbedding, \
                                                      apply_rotary_pos_emb, repeat_kv
 
 
@@ -112,9 +113,62 @@ class FlatQuantQwen2MLP(torch.nn.Module):
 
 
 class FlatQuantQwen2Attention(Qwen2Attention):
+    @staticmethod
+    def _build_rotary_embedding(module):
+        config = module.config
+        device = module.q_proj.weight.device
+        attempts = [
+            lambda: Qwen2RotaryEmbedding(config=config, device=device),
+            lambda: Qwen2RotaryEmbedding(config=config),
+            lambda: Qwen2RotaryEmbedding(config, device=device),
+            lambda: Qwen2RotaryEmbedding(config),
+        ]
+        last_error = None
+        for attempt in attempts:
+            try:
+                return attempt()
+            except (TypeError, AttributeError) as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unable to construct Qwen2RotaryEmbedding")
+
+    def _compute_position_embeddings(self, value_states, position_ids):
+        if not hasattr(self, "rotary_emb"):
+            raise AttributeError("FlatQuantQwen2Attention has no rotary_emb fallback")
+
+        attempts = [
+            lambda: self.rotary_emb(value_states, position_ids),
+            lambda: self.rotary_emb(value_states, position_ids=position_ids),
+            lambda: self.rotary_emb(position_ids=position_ids, x=value_states),
+        ]
+        last_error = None
+        for attempt in attempts:
+            try:
+                return attempt()
+            except TypeError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Unable to compute Qwen2 rotary position embeddings")
+
     def __init__(self, args, module: Qwen2Attention):
         super().__init__(module.config, module.layer_idx)
         self.args = args
+        self._use_position_embeddings_api = "position_embeddings" in inspect.signature(module.forward).parameters
+        self.hidden_size = getattr(module, "hidden_size", module.config.hidden_size)
+        self.num_heads = getattr(module, "num_heads", getattr(module, "num_attention_heads", module.config.num_attention_heads))
+        self.num_key_value_heads = getattr(module, "num_key_value_heads", module.config.num_key_value_heads)
+        self.head_dim = getattr(module, "head_dim", getattr(module.config, "head_dim", self.hidden_size // self.num_heads))
+        self.num_key_value_groups = getattr(module, "num_key_value_groups", self.num_heads // self.num_key_value_heads)
+        self.scaling = getattr(module, "scaling", self.head_dim ** -0.5)
+        self.attention_dropout = getattr(module, "attention_dropout", getattr(module.config, "attention_dropout", 0.0))
+        self.is_causal = getattr(module, "is_causal", True)
+        self.sliding_window = getattr(module, "sliding_window", None)
+        if hasattr(module, "rotary_emb"):
+            self.rotary_emb = module.rotary_emb
+        else:
+            self.rotary_emb = self._build_rotary_embedding(module)
         
         self.q_proj = FlatQuantizedLinear(args, module.q_proj)
         self.k_proj = FlatQuantizedLinear(args, module.k_proj)
@@ -201,8 +255,20 @@ class FlatQuantQwen2Attention(Qwen2Attention):
             k = self.k_cache_quantizer(k).to(q)
         return q, k
 
-    def forward(self, hidden_states, attention_mask, position_ids, past_key_value, 
-            output_attentions, use_cache, cache_position=None, position_embeddings=None, **kwargs):
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        position_ids=None,
+        past_key_value=None,
+        output_attentions=False,
+        use_cache=False,
+        cache_position=None,
+        position_embeddings=None,
+        past_key_values=None,
+        **kwargs,
+    ):
+        cache_obj = past_key_values if past_key_values is not None else past_key_value
         bsz, q_len, _ = hidden_states.size()
         if self._ori_mode:
             query_states, key_states, value_states = self._ori_forward_after_ln(hidden_states)
@@ -220,7 +286,7 @@ class FlatQuantQwen2Attention(Qwen2Attention):
             #     "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
             #     "removed and `position_embeddings` will be mandatory."
             # )
-            cos, sin = self.rotary_emb(value_states, position_ids)
+            cos, sin = self._compute_position_embeddings(value_states, position_ids)
         else:
             cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -229,9 +295,9 @@ class FlatQuantQwen2Attention(Qwen2Attention):
             query_states, key_states = self.quant_kcache(query_states, key_states)
             value_states = self.quant_vcache(value_states)
 
-        if past_key_value is not None:
+        if cache_obj is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = cache_obj.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -278,7 +344,7 @@ class FlatQuantQwen2Attention(Qwen2Attention):
 
         if not output_attentions:
             attn_weights = None
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights, cache_obj
 
     def reparameterize(self):
         if self.ln_trans is not None:

@@ -70,7 +70,7 @@ def get_act_stats(model, dataset):
 @torch.no_grad()
 def get_flatness(args, logger, transform_type=None):
     model, apply_flatquant_to_model = model_utils.get_model(args.model, args.hf_token)
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, use_fast=False, use_auth_token=args.hf_token)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, use_fast=False, token=args.hf_token)
     model.eval()
 
     # get calibration data
@@ -161,7 +161,7 @@ def get_flatness(args, logger, transform_type=None):
 
 def get_act_scales(args, logger):
     model, apply_flatquant_to_model = model_utils.get_model(args.model, args.hf_token)
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, use_fast=False, use_auth_token=args.hf_token)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, use_fast=False, token=args.hf_token)
     model.eval()
 
     # get calibration data

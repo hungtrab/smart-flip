@@ -78,6 +78,7 @@ FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
 CORR_RUN_NAME="${CORR_RUN_NAME:-${ORIGIN_METHOD}_bias_correction_${MODEL_SLUG}}"
 BIAS_CORRECTION_SAMPLES="${BIAS_CORRECTION_SAMPLES:-4096}"
+BITS="${BITS:-4}"
 
 if [ "$RUN_FLOAT_MODEL" = "1" ]; then
   echo "==> float_model :: ${MODEL_PATH}"
@@ -92,7 +93,7 @@ RAW_ARGS=(
   --origin-method "$ORIGIN_METHOD"
   --post-correction none
   --run-name "$RAW_RUN_NAME"
-  --bits "4"
+  --bits "$BITS"
 )
 
 "$PYTHON_BIN" main.py quantize "${RAW_ARGS[@]}"
@@ -104,7 +105,7 @@ CORR_ARGS=(
   --post-correction "$POST_CORRECTION"
   --bias-correction-samples "$BIAS_CORRECTION_SAMPLES"
   --run-name "$CORR_RUN_NAME"
-  --bits "4"
+  --bits "$BITS"
 )
 
 "$PYTHON_BIN" main.py quantize "${CORR_ARGS[@]}"

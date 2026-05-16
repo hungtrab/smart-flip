@@ -1,8 +1,30 @@
+import os
+
 import torch
 import torch.nn as nn
 
 from flatquant.flat_utils import kronecker_matmul
 from flatquant.function_utils import get_init_weight, get_inverse
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+FLATQUANT_ORTHOGONAL_MAP = os.environ.get("FLATQUANT_ORTHOGONAL_MAP", "matrix_exp")
+FLATQUANT_USE_TRIVIALIZATION = _env_flag("FLATQUANT_USE_TRIVIALIZATION", True)
+
+
+def _orthogonal(linear: nn.Linear) -> nn.Module:
+    return nn.utils.parametrizations.orthogonal(
+        linear,
+        orthogonal_map=FLATQUANT_ORTHOGONAL_MAP,
+        use_trivialization=FLATQUANT_USE_TRIVIALIZATION,
+    )
+
 
 # ---------- transformation version of singular value decomposition ----------
 class SVDSingleTransMatrix(nn.Module):
@@ -10,10 +32,10 @@ class SVDSingleTransMatrix(nn.Module):
         super(SVDSingleTransMatrix, self).__init__()
         self.linear_u = nn.Linear(size, size, bias=False, dtype=torch.float32)
         self.linear_u.weight.data = get_init_weight(size).to(self.linear_u.weight)
-        self.linear_u = nn.utils.parametrizations.orthogonal(self.linear_u, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_u = _orthogonal(self.linear_u)
         self.linear_v = nn.Linear(size, size, bias=False, dtype=torch.float32)
         self.linear_v.weight.data = get_init_weight(size).to(self.linear_v.weight)
-        self.linear_v = nn.utils.parametrizations.orthogonal(self.linear_v, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_v = _orthogonal(self.linear_v)
         self.linear_diag = torch.nn.Parameter(torch.ones(size, dtype=torch.float32), requires_grad=True)
 
         self._eval_mode = False
@@ -59,18 +81,18 @@ class SVDDecomposeTransMatrix(nn.Module):
         super(SVDDecomposeTransMatrix, self).__init__()
         self.linear_u_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.linear_u_left.weight.data = get_init_weight(left_size).to(self.linear_u_left.weight)
-        self.linear_u_left = nn.utils.parametrizations.orthogonal(self.linear_u_left, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_u_left = _orthogonal(self.linear_u_left)
         self.linear_v_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.linear_v_left.weight.data = get_init_weight(left_size).to(self.linear_v_left.weight)
-        self.linear_v_left = nn.utils.parametrizations.orthogonal(self.linear_v_left, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_v_left = _orthogonal(self.linear_v_left)
         self.linear_diag_left = torch.nn.Parameter(torch.ones(left_size, dtype=torch.float32), requires_grad=True)
 
         self.linear_u_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.linear_u_right.weight.data = get_init_weight(right_size).to(self.linear_u_right.weight)
-        self.linear_u_right = nn.utils.parametrizations.orthogonal(self.linear_u_right, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_u_right = _orthogonal(self.linear_u_right)
         self.linear_v_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.linear_v_right.weight.data = get_init_weight(right_size).to(self.linear_v_right.weight)
-        self.linear_v_right = nn.utils.parametrizations.orthogonal(self.linear_v_right, orthogonal_map="cayley", use_trivialization=False)
+        self.linear_v_right = _orthogonal(self.linear_v_right)
         self.linear_diag_right = torch.nn.Parameter(torch.ones(right_size, dtype=torch.float32), requires_grad=True)
 
         self.add_diag = add_diag

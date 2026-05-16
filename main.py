@@ -78,6 +78,21 @@ def resolve_wandb_api_key() -> str | None:
     return os.getenv("WANDB_API_KEY")
 
 
+def configure_hf_datasets_cache(base_dir: str | Path = "./data/cache/hf_datasets"):
+    try:
+        import datasets
+    except ImportError:
+        return
+
+    version = getattr(datasets, "__version__", "unknown").replace("/", "_")
+    cache_dir = Path(base_dir) / f"datasets-{version}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    preserve_existing = os.getenv("PRESERVE_HF_DATASETS_CACHE") == "1"
+    if preserve_existing and os.getenv("HF_DATASETS_CACHE"):
+        return
+    os.environ["HF_DATASETS_CACHE"] = str(cache_dir.resolve())
+
+
 def normalize_run_value(value) -> str:
     text = f"{value:g}" if isinstance(value, float) else str(value)
     return text.replace("-", "m").replace(".", "p").replace("/", "_")
@@ -252,7 +267,15 @@ def build_wandb_tags(args, variant: str, model_slug: str) -> list[str]:
     return tags
 
 
-def log_results_to_wandb(args, run_name: str, variant: str, model_paths: dict[str, str], results: dict, model_slug: str):
+def log_results_to_wandb(
+    args,
+    run_name: str,
+    variant: str,
+    model_paths: dict[str, str],
+    results: dict,
+    model_slug: str,
+    results_path: str | Path | None = None,
+):
     try:
         import wandb
     except ImportError:
@@ -283,6 +306,22 @@ def log_results_to_wandb(args, run_name: str, variant: str, model_paths: dict[st
     wandb.summary["model_slug"] = model_slug
     wandb.summary["model_paths"] = model_paths
     wandb.summary["source_model"] = getattr(args, "model_path", None)
+    if results_path is not None:
+        results_path = Path(results_path)
+        if results_path.exists():
+            wandb.save(str(results_path))
+            artifact = wandb.Artifact(
+                name=f"{run_name}-eval-json",
+                type="evaluation-results",
+                metadata={
+                    "run_name": run_name,
+                    "variant": variant,
+                    "model_slug": model_slug,
+                    "source_model": getattr(args, "model_path", None),
+                },
+            )
+            artifact.add_file(str(results_path), name=results_path.name)
+            run.log_artifact(artifact)
     wandb.finish()
 
 
@@ -300,7 +339,7 @@ def evaluate_model_paths(args, model_paths: dict[str, str], variant: str = "eval
     output_path = Path(args.results_eval_dir) / f"{run_name}.json"
     save_evaluation_results(combined_results, output_path)
     if getattr(args, "use_wandb", False):
-        log_results_to_wandb(args, run_name, variant, model_paths, combined_results, model_slug)
+        log_results_to_wandb(args, run_name, variant, model_paths, combined_results, model_slug, output_path)
     print(f"\nSaved evaluation results to {output_path}")
     return output_path
 
@@ -536,6 +575,7 @@ def build_parser():
         cmd.add_argument("--gptq-static-groups", action="store_true", default=False)
         cmd.add_argument("--gptq-mse", action="store_true", default=False)
         cmd.add_argument("--flatquant-epochs", type=int, default=15)
+        cmd.add_argument("--flatquant-a-bits", type=int, default=4)
         cmd.add_argument("--flatquant-cali-bsz", type=int, default=4)
         cmd.add_argument("--flatquant-lr", type=float, default=5e-3)
         cmd.add_argument("--flatquant-cali-trans", action="store_true", default=True)
@@ -588,6 +628,7 @@ def build_parser():
 
 def main():
     load_runtime_env()
+    configure_hf_datasets_cache()
     parser = build_parser()
     args = parser.parse_args()
     if args.lm_eval_tasks == list(DEFAULT_LM_EVAL_TASKS["extended"]) and args.lm_eval_task_preset in DEFAULT_LM_EVAL_TASKS:

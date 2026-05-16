@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-mistralai/Mistral-7B-v0.3}"
+MODEL_PATH="${MODEL_PATH:-meta-llama/Meta-Llama-3-8B}"
 MODELS_ROOT="${MODELS_ROOT:-/models}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 RESULTS_MODELS_DIR="${RESULTS_MODELS_DIR:-./results/models}"
@@ -72,44 +72,63 @@ if [ "$USE_WANDB" = "1" ]; then
   fi
 fi
 
-GPTQ_PERCDAMP="${GPTQ_PERCDAMP:-0.01}"
-GPTQ_SYM="${GPTQ_SYM:-1}"
-GPTQ_ACT_ORDER="${GPTQ_ACT_ORDER:-0}"
-GPTQ_TRUE_SEQUENTIAL="${GPTQ_TRUE_SEQUENTIAL:-1}"
-GPTQ_STATIC_GROUPS="${GPTQ_STATIC_GROUPS:-0}"
-GPTQ_MSE="${GPTQ_MSE:-0}"
+FLATQUANT_EPOCHS="${FLATQUANT_EPOCHS:-15}"
+FLATQUANT_CALI_BSZ="${FLATQUANT_CALI_BSZ:-4}"
+FLATQUANT_LR="${FLATQUANT_LR:-5e-3}"
+FLATQUANT_DIAG_INIT="${FLATQUANT_DIAG_INIT:-sq_style}"
+FLATQUANT_DIAG_ALPHA="${FLATQUANT_DIAG_ALPHA:-0.3}"
+FLATQUANT_CALI_TRANS="${FLATQUANT_CALI_TRANS:-1}"
+FLATQUANT_ADD_DIAG="${FLATQUANT_ADD_DIAG:-1}"
+FLATQUANT_LWC="${FLATQUANT_LWC:-1}"
+FLATQUANT_LAC="${FLATQUANT_LAC:-1}"
+FLATQUANT_ORTHOGONAL_MAP="${FLATQUANT_ORTHOGONAL_MAP:-matrix_exp}"
+FLATQUANT_USE_TRIVIALIZATION="${FLATQUANT_USE_TRIVIALIZATION:-1}"
 
-add_gptq_args() {
+export FLATQUANT_ORTHOGONAL_MAP
+export FLATQUANT_USE_TRIVIALIZATION
+
+add_flatquant_args() {
   local -n args_ref=$1
-  args_ref+=(--gptq-percdamp "$GPTQ_PERCDAMP")
-  if [ "$GPTQ_SYM" = "1" ]; then
-    args_ref+=(--gptq-sym)
-  fi
-  if [ "$GPTQ_ACT_ORDER" = "1" ]; then
-    args_ref+=(--gptq-act-order)
-  fi
-  if [ "$GPTQ_TRUE_SEQUENTIAL" = "1" ]; then
-    args_ref+=(--gptq-true-sequential)
+  args_ref+=(
+    --flatquant-epochs "$FLATQUANT_EPOCHS"
+    --flatquant-cali-bsz "$FLATQUANT_CALI_BSZ"
+    --flatquant-lr "$FLATQUANT_LR"
+    --flatquant-diag-init "$FLATQUANT_DIAG_INIT"
+    --flatquant-diag-alpha "$FLATQUANT_DIAG_ALPHA"
+  )
+  if [ "$FLATQUANT_CALI_TRANS" = "1" ]; then
+    args_ref+=(--flatquant-cali-trans)
   else
-    args_ref+=(--no-gptq-true-sequential)
+    args_ref+=(--no-flatquant-cali-trans)
   fi
-  if [ "$GPTQ_STATIC_GROUPS" = "1" ]; then
-    args_ref+=(--gptq-static-groups)
+  if [ "$FLATQUANT_ADD_DIAG" = "1" ]; then
+    args_ref+=(--flatquant-add-diag)
+  else
+    args_ref+=(--no-flatquant-add-diag)
   fi
-  if [ "$GPTQ_MSE" = "1" ]; then
-    args_ref+=(--gptq-mse)
+  if [ "$FLATQUANT_LWC" = "1" ]; then
+    args_ref+=(--flatquant-lwc)
+  else
+    args_ref+=(--no-flatquant-lwc)
+  fi
+  if [ "$FLATQUANT_LAC" = "1" ]; then
+    args_ref+=(--flatquant-lac)
+  else
+    args_ref+=(--no-flatquant-lac)
   fi
 }
 
-ORIGIN_METHOD="gptq"
-POST_CORRECTION="bias_correction"
+ORIGIN_METHOD="flatquant"
+POST_CORRECTION="smart_flip"
 MODEL_SLUG="${MODEL_PATH##*/}"
 FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
 RAW_MODEL_DIR="${RAW_MODEL_DIR:-${RESULTS_MODELS_DIR}/${ORIGIN_METHOD}_raw/${RAW_RUN_NAME}}"
-CORR_RUN_NAME="${CORR_RUN_NAME:-${ORIGIN_METHOD}_bias_correction_${MODEL_SLUG}}"
-BIAS_CORRECTION_SAMPLES="${BIAS_CORRECTION_SAMPLES:-4096}"
-BITS="${BITS:-4}"
+
+BITS="3"
+KNEE="0.02"
+MAX_FLIP="0.05"
+RUN_NAME="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${BITS}_k${KNEE}_f${MAX_FLIP}"
 
 if [ "$RUN_FLOAT_MODEL" = "1" ]; then
   echo "==> float_model :: ${MODEL_PATH}"
@@ -119,7 +138,7 @@ else
 fi
 
 if [ "$RUN_RAW_QUANTIZE" = "1" ]; then
-  echo "==> raw_quantize :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD}"
+  echo "==> raw_quantize :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${BITS}"
   RAW_ARGS=(
     "${QUANT_BASE_ARGS[@]}"
     --origin-method "$ORIGIN_METHOD"
@@ -127,25 +146,26 @@ if [ "$RUN_RAW_QUANTIZE" = "1" ]; then
     --run-name "$RAW_RUN_NAME"
     --bits "$BITS"
   )
-  add_gptq_args RAW_ARGS
+  add_flatquant_args RAW_ARGS
   "$PYTHON_BIN" main.py quantize "${RAW_ARGS[@]}"
 else
-  if [ ! -f "$RAW_MODEL_DIR/gptq_raw_artifacts.pt" ]; then
-    echo "Missing raw GPTQ artifacts at ${RAW_MODEL_DIR}/gptq_raw_artifacts.pt" >&2
+  if [ ! -f "$RAW_MODEL_DIR/flat_parameters.pth" ]; then
+    echo "Missing raw FlatQuant parameters at ${RAW_MODEL_DIR}/flat_parameters.pth" >&2
     exit 1
   fi
   echo "==> skipping raw_quantize :: ${MODEL_PATH} :: using existing raw model at ${RAW_MODEL_DIR}"
 fi
 
-echo "==> bias_correction :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD}"
-CORR_ARGS=(
+echo "==> smart_flip :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${BITS} :: knee=${KNEE} :: max_flip=${MAX_FLIP}"
+QUANT_ARGS=(
   "${QUANT_BASE_ARGS[@]}"
   --origin-method "$ORIGIN_METHOD"
   --post-correction "$POST_CORRECTION"
-  --bias-correction-samples "$BIAS_CORRECTION_SAMPLES"
-  --gptq-raw-path "$RAW_MODEL_DIR"
-  --run-name "$CORR_RUN_NAME"
   --bits "$BITS"
+  --knee-tolerance "$KNEE"
+  --max-flip-percent "$MAX_FLIP"
+  --run-name "$RUN_NAME"
+  --flatquant-raw-path "$RAW_MODEL_DIR"
 )
-add_gptq_args CORR_ARGS
-"$PYTHON_BIN" main.py quantize "${CORR_ARGS[@]}"
+add_flatquant_args QUANT_ARGS
+"$PYTHON_BIN" main.py quantize "${QUANT_ARGS[@]}"
