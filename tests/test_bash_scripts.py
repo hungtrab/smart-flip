@@ -15,6 +15,7 @@ class BashScriptTests(unittest.TestCase):
             Path("smart_flip/gptq/run_llama3.sh"),
             Path("smart_flip/gptq/run_llama31.sh"),
             Path("smart_flip/gptq/run_mistral.sh"),
+            Path("smart_flip/gptq/run_mistral_skip_float.sh"),
             Path("smart_flip/gptq/run_qwen25.sh"),
             Path("smart_flip/flatquant/run_llama3.sh"),
             Path("smart_flip/flatquant/run_llama31.sh"),
@@ -249,6 +250,19 @@ class BashScriptTests(unittest.TestCase):
             self.assertIn('echo "==> skipping raw_quantize :: ${MODEL_PATH} :: using existing raw model at ${RAW_MODEL_DIR}"', content)
             self.assertIn('--gptq-raw-path "$RAW_MODEL_DIR"', content)
             self.assertIn('--gptq-percdamp "$GPTQ_PERCDAMP"', content)
+
+    def test_gptq_mistral_skip_float_script_defaults_to_skipping_float_model(self):
+        content = Path("scripts/bash/smart_flip/gptq/run_mistral_skip_float.sh").read_text(encoding="utf-8")
+        for snippet in [
+            'RUN_FLOAT_MODEL="${RUN_FLOAT_MODEL:-0}"',
+            'RUN_RAW_QUANTIZE="${RUN_RAW_QUANTIZE:-1}"',
+            'if [ "$RUN_FLOAT_MODEL" = "1" ]; then',
+            'echo "==> skipping float_model :: ${MODEL_PATH}"',
+            'RAW_MODEL_DIR="${RAW_MODEL_DIR:-${RESULTS_MODELS_DIR}/${ORIGIN_METHOD}_raw/${RAW_RUN_NAME}}"',
+            '--gptq-raw-path "$RAW_MODEL_DIR"',
+            '--gptq-percdamp "$GPTQ_PERCDAMP"',
+        ]:
+            self.assertIn(snippet, content)
 
     def test_gptq_llama_scripts_default_to_llama_friendly_settings(self):
         for relative_path in [
