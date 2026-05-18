@@ -369,6 +369,8 @@ def run_quantize(args):
         args=args,
         recipe=recipe,
     )
+    if recipe.origin_method == "gptq" and recipe.post_correction == "none" and hasattr(quantizer, "set_artifact_dir"):
+        quantizer.set_artifact_dir(output_dir)
     if recipe.origin_method == "flatquant":
         quantizer.set_artifact_dir(output_dir)
         quantizer.quantize_model_sequential(
@@ -385,8 +387,8 @@ def run_quantize(args):
 
     model.save_pretrained(output_dir, safe_serialization=recipe.origin_method != "flatquant")
     tokenizer.save_pretrained(output_dir)
-    # if recipe.origin_method == "gptq" and recipe.post_correction == "none":
-    #     quantizer.save_raw_artifacts(output_dir)
+    if recipe.origin_method == "gptq" and recipe.post_correction == "none":
+        quantizer.save_raw_artifacts(output_dir)
 
     metadata = {
         "variant": recipe.variant_name,

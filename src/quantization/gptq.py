@@ -562,10 +562,18 @@ class GPTQQuantizer:
         self.post_correction = post_correction
         self.layer_stats: Dict[str, dict] = {}
         self.raw_artifacts: Dict[str, dict] = {}
+        self._artifact_dir: Optional[Path] = None
+        self._artifact_layers_dirname = "gptq_raw_artifacts_layers"
+        self._artifact_manifest_version = "sharded_v1"
 
         print("\n[GPTQ Quantizer Initialized]")
         print(f"  Config: {self.config}")
         print(f"  Post correction: {type(self.post_correction).__name__ if self.post_correction else 'none'}")
+
+    def set_artifact_dir(self, output_dir: str | Path):
+        self._artifact_dir = Path(output_dir)
+        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+        (self._artifact_dir / self._artifact_layers_dirname).mkdir(parents=True, exist_ok=True)
 
     def _get_layers(self):
         if not hasattr(self.model, "model") or not hasattr(self.model.model, "layers"):
@@ -585,6 +593,23 @@ class GPTQQuantizer:
     def _cleanup_cuda():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    @staticmethod
+    def _layer_key_to_filename(layer_key: str) -> str:
+        safe = layer_key.replace("/", "__").replace(".", "__")
+        return f"{safe}.pt"
+
+    def _save_layer_artifact(self, layer_key: str, artifact: dict):
+        if self._artifact_dir is None:
+            self.raw_artifacts[layer_key] = artifact
+            return
+
+        layers_dir = self._artifact_dir / self._artifact_layers_dirname
+        layers_dir.mkdir(parents=True, exist_ok=True)
+        filename = self._layer_key_to_filename(layer_key)
+        artifact_path = layers_dir / filename
+        torch.save(artifact, artifact_path)
+        self.raw_artifacts[layer_key] = {"file": filename}
 
     @staticmethod
     def _prepare_layer_kwargs(kwargs):
@@ -742,7 +767,7 @@ class GPTQQuantizer:
                     layer_key = f"model.layers.{layer_idx}.{name}"
                     self.layer_stats[layer_key] = gptq_layer.last_stats
                     if gptq_layer.raw_artifact is not None:
-                        self.raw_artifacts[layer_key] = gptq_layer.raw_artifact
+                        self._save_layer_artifact(layer_key, gptq_layer.raw_artifact)
                     gptq_layer.free()
 
             for sample_idx in range(nsamples):
@@ -760,6 +785,14 @@ class GPTQQuantizer:
 
     def save_raw_artifacts(self, output_dir: str | Path):
         artifact_path = Path(output_dir) / GPTQ_RAW_ARTIFACT_FILENAME
+        if self.raw_artifacts and all(isinstance(v, dict) and "file" in v for v in self.raw_artifacts.values()):
+            manifest = {
+                "format": self._artifact_manifest_version,
+                "layers_dir": self._artifact_layers_dirname,
+                "layers": {k: v["file"] for k, v in self.raw_artifacts.items()},
+            }
+            torch.save(manifest, artifact_path)
+            return
         torch.save(self.raw_artifacts, artifact_path)
 
     def load_raw_artifacts(self, raw_model_dir: str | Path) -> dict:
@@ -771,14 +804,31 @@ class GPTQQuantizer:
         if self.post_correction is None:
             raise ValueError("GPTQ raw artifact reuse requires a post correction")
 
-        artifacts = self.load_raw_artifacts(raw_model_dir)
+        artifacts_payload = self.load_raw_artifacts(raw_model_dir)
+        sharded_manifest = (
+            isinstance(artifacts_payload, dict)
+            and artifacts_payload.get("format") == self._artifact_manifest_version
+            and "layers" in artifacts_payload
+        )
+        layers_dir = None
+        if sharded_manifest:
+            layers_dir = Path(raw_model_dir) / artifacts_payload.get("layers_dir", self._artifact_layers_dirname)
+
+        def get_artifact(layer_key: str):
+            if sharded_manifest:
+                filename = artifacts_payload["layers"].get(layer_key)
+                if filename is None:
+                    return None
+                return torch.load(layers_dir / filename, map_location="cpu")
+            return artifacts_payload.get(layer_key)
+
         layers = self._get_layers()
         for layer_idx in range(len(layers)):
             layer = layers[layer_idx]
             full = self.find_layers(layer)
             for name, module in full.items():
                 layer_key = f"model.layers.{layer_idx}.{name}"
-                artifact = artifacts.get(layer_key)
+                artifact = get_artifact(layer_key)
                 if artifact is None:
                     continue
                 smart_flip = self.post_correction if isinstance(self.post_correction, SmartFlipCorrection) else None
