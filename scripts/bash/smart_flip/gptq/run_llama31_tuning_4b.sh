@@ -17,8 +17,8 @@ STRIDE="${STRIDE:-512}"
 MAX_LENGTH="${MAX_LENGTH:-2048}"
 C4_SAMPLES="${C4_SAMPLES:-500}"
 LM_EVAL_TASK_PRESET="${LM_EVAL_TASK_PRESET:-extended}"
-INCLUDE_LM_EVAL="${INCLUDE_LM_EVAL:-1}"
-INCLUDE_C4="${INCLUDE_C4:-1}"
+INCLUDE_LM_EVAL="${INCLUDE_LM_EVAL:-0}"
+INCLUDE_C4="${INCLUDE_C4:-0}"
 USE_WANDB="${USE_WANDB:-1}"
 WANDB_PROJECT="${WANDB_PROJECT:-egbc}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
@@ -109,9 +109,9 @@ MODEL_SLUG="${MODEL_PATH##*/}"
 FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
 RAW_MODEL_DIR="${RAW_MODEL_DIR:-results/models/gptq_raw/gptq_raw_Llama-3.1-8B}"
-BITS_VALUES=(3)
+BITS_VALUES=(4)
 KNEE_VALUES=(0.0 0.01 0.02 0.03 0.04 0.05)
-MAX_FLIP_VALUES=(0.01 0.02 0.03 0.04 0.05)
+MAX_FLIP_VALUES=(0.05 0.01 0.02 0.03 0.04)
 
 if [ "$RUN_FLOAT_MODEL" = "1" ]; then
   echo "==> float_model :: ${MODEL_PATH}"
@@ -127,7 +127,7 @@ if [ "$RUN_RAW_QUANTIZE" = "1" ]; then
     --origin-method "$ORIGIN_METHOD"
     --post-correction none
     --run-name "$RAW_RUN_NAME"
-    --bits "3"
+    --bits "4"
   )
   add_gptq_args RAW_ARGS
   "$PYTHON_BIN" main.py quantize "${RAW_ARGS[@]}"
