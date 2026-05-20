@@ -367,12 +367,28 @@ class GPTQ:
                 corrected_for_bias = corrected_weights
 
             self.layer.weight.data = original_for_bias.reshape(self.layer.weight.shape).to(self.layer.weight.data.dtype)
-            bias_delta = self.bias_correction.compute_bias_delta(
-                self.layer,
-                corrected_for_bias,
-                self.activation_samples,
-                device=str(self.dev),
-            )
+            if self.activation_samples is not None:
+                bias_delta = self.bias_correction.compute_bias_delta(
+                    self.layer,
+                    corrected_for_bias,
+                    self.activation_samples,
+                    device=str(self.dev),
+                )
+            elif self.activation_count > 0:
+                # Fallback for reused raw GPTQ artifacts generated without bias sample capture.
+                # E[y_orig - y_quant] = (W_orig - W_quant) @ E[x].
+                act_mean = (self.activation_sums / self.activation_count).to(
+                    device=self.dev,
+                    dtype=corrected_for_bias.dtype,
+                )
+                weight_delta = original_for_bias - corrected_for_bias
+                bias_delta = torch.matmul(weight_delta, act_mean)
+            else:
+                bias_delta = torch.zeros(
+                    self.layer.weight.shape[0],
+                    device=self.dev,
+                    dtype=self.layer.weight.data.dtype,
+                )
             self.bias_correction.apply_bias_delta(
                 self.layer,
                 bias_delta,
