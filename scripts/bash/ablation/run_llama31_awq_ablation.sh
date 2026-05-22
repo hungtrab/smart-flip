@@ -80,7 +80,7 @@ run_variant() {
   local -a variant_args
 
   case "$requested_variant" in
-    best)
+    best|none)
       variant="best"
       variant_args=()
       ;;
@@ -93,7 +93,7 @@ run_variant() {
       variant_args=(--disable-max-flip-cap)
       ;;
     *)
-      echo "Unknown ablation variant: $requested_variant. Use best, no_k, no_f, or all." >&2
+      echo "Unknown ablation variant: $requested_variant. Use best/none, no_k, no_f, or all." >&2
       exit 2
       ;;
   esac
