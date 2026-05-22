@@ -79,6 +79,8 @@ def build_post_correction(args, recipe: QuantizationRecipe):
                 knee_tolerance=args.knee_tolerance,
                 max_flip_percent=args.max_flip_percent,
                 use_james_stein=args.use_james_stein,
+                enable_knee_mask=not args.disable_knee_mask,
+                enable_max_flip_cap=not args.disable_max_flip_cap,
             )
         )
     if recipe.post_correction == "bias_correction":
