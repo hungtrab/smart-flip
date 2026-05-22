@@ -267,7 +267,7 @@ class GPTQ:
             quant_state = self._build_quant_state(original_weights, pre_round, integer_weights, scale, zero)
             corrected_weights, outlier_percent, flip_stats = self.smart_flip.apply(quant_state, act_mean)
             if dead_mask is not None and torch.any(dead_mask):
-                corrected_weights[:, dead_mask] = quant_weights[:, dead_mask]
+                corrected_weights[:, dead_mask] = quant_weights[:, dead_mask].to(corrected_weights.dtype)
 
         if self.bias_correction is not None and isinstance(self.layer, nn.Linear):
             bias_delta = self.bias_correction.compute_bias_delta(

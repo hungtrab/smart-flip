@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import time
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, TYPE_CHECKING, Tuple
 
@@ -47,10 +48,15 @@ class AWQQuantizerXL:
         self.post_correction = post_correction
         self.activation_data: Dict[str, list] = {}
         self.layer_stats: Dict[str, dict] = {}
+        self.timing_stats: Dict[str, float] = {"smart_flip_seconds": 0.0}
 
         print("\n[AWQ Quantizer XL Initialized]")
         print(f"  Config: {asdict(self.config)}")
         print(f"  Post correction: {type(self.post_correction).__name__ if self.post_correction else 'none'}")
+
+    def _sync_cuda(self) -> None:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     def get_hook(self, name: str):
         def hook(_module, input, _output):
@@ -214,11 +220,16 @@ class AWQQuantizerXL:
         outlier_pct = 0.0
         flip_stats = self.empty_flip_stats()
         if self.post_correction is not None:
+            self._sync_cuda()
+            flip_t0 = time.perf_counter()
             post_mean = self.build_post_correction_means(name, w.dtype)
             if post_mean is None:
                 post_mean = torch.zeros(w.shape[1], device=w.device, dtype=w.dtype)
             scaled_act_mean = post_mean / best_scales
             w_quant, outlier_pct, flip_stats = self.post_correction.apply(quant_state, scaled_act_mean)
+            self._sync_cuda()
+            flip_t1 = time.perf_counter()
+            self.timing_stats["smart_flip_seconds"] += flip_t1 - flip_t0
         else:
             w_quant = quant_state.dequantize_truncated()
 
@@ -250,7 +261,12 @@ class AWQQuantizerXL:
         elif self.post_correction is None:
             post_mean = raw_mean.to(self.device).to(w.dtype)
         else:
+            self._sync_cuda()
+            flip_t0 = time.perf_counter()
             post_mean = self.post_correction.prepare_activation_means(raw_mean).to(self.device).to(w.dtype)
+            self._sync_cuda()
+            flip_t1 = time.perf_counter()
+            self.timing_stats["smart_flip_seconds"] += flip_t1 - flip_t0
 
         chunk_size = out_features // num_chunks
         chunk_boundaries = [
@@ -300,12 +316,17 @@ class AWQQuantizerXL:
             w_scaled = w_chunk * best_scales.unsqueeze(0)
             quant_state = self.quantize_weight_groupwise_raw(w_scaled)
             if self.post_correction is not None:
+                self._sync_cuda()
+                flip_t0 = time.perf_counter()
                 scaled_act_mean = post_mean / best_scales
                 w_quant, outlier_pct, flip_stats = self.post_correction.apply(
                     quant_state,
                     scaled_act_mean,
                     debug=(debug and start_idx == 0),
                 )
+                self._sync_cuda()
+                flip_t1 = time.perf_counter()
+                self.timing_stats["smart_flip_seconds"] += flip_t1 - flip_t0
             else:
                 w_quant = quant_state.dequantize_truncated()
                 outlier_pct = 0.0
@@ -413,4 +434,3 @@ class AWQQuantizerXL:
         print("Quantization Complete")
         print(f"  Total layers quantized: {quantized_count}/{num_layers}")
         print("=" * 80)
-

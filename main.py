@@ -439,6 +439,7 @@ def run_quantize(args):
         "config": build_metadata_config(args),
         "base_config": base_config.__dict__,
         "post_correction_config": correction.config.__dict__ if correction is not None else None,
+        "timing_stats": getattr(quantizer, "timing_stats", {}),
         "layer_stats": quantizer.layer_stats,
         "evaluation_target": quantizer.describe_evaluation_target() if hasattr(quantizer, "describe_evaluation_target") else {"kind": "saved_model_dir", "path": str(output_dir)},
     }
@@ -566,6 +567,18 @@ def build_parser():
         cmd.add_argument("--no-james-stein", dest="use_james_stein", action="store_false")
         cmd.add_argument("--knee-tolerance", type=float, default=0.0)
         cmd.add_argument("--max-flip-percent", type=float, default=0.05)
+        cmd.add_argument(
+            "--disable-knee-mask",
+            action="store_true",
+            default=False,
+            help="Disable knee-point outlier masking during smart-flip ablation.",
+        )
+        cmd.add_argument(
+            "--disable-max-flip-cap",
+            action="store_true",
+            default=False,
+            help="Disable the per-row max-flip cap during smart-flip ablation.",
+        )
         cmd.add_argument("--bias-correction-samples", type=int, default=4096)
         cmd.add_argument("--gptq-percdamp", type=float, default=0.01)
         cmd.add_argument("--gptq-sym", action="store_true", default=False)
