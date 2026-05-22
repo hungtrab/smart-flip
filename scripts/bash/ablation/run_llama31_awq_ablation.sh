@@ -26,8 +26,8 @@ SEED="${SEED:-42}"
 STRIDE="${STRIDE:-512}"
 MAX_LENGTH="${MAX_LENGTH:-2048}"
 C4_SAMPLES="${C4_SAMPLES:-500}"
-RESULTS_MODELS_DIR="${RESULTS_MODELS_DIR:-./results/models/ablation/llama31_awq_b${BITS}/${ABLATION_VARIANT}}"
-RESULTS_EVAL_DIR="${RESULTS_EVAL_DIR:-./results/eval/ablation/llama31_awq_b${BITS}/${ABLATION_VARIANT}}"
+RESULTS_MODELS_ROOT="${RESULTS_MODELS_ROOT:-${RESULTS_MODELS_DIR:-./results/models/ablation/llama31_awq_b${BITS}}}"
+RESULTS_EVAL_ROOT="${RESULTS_EVAL_ROOT:-${RESULTS_EVAL_DIR:-./results/eval/ablation/llama31_awq_b${BITS}}}"
 CALIBRATION_CACHE_DIR="${CALIBRATION_CACHE_DIR:-./data/cache/calibration}"
 EVAL_CACHE_DIR="${EVAL_CACHE_DIR:-./data/cache/eval}"
 WANDB_PROJECT="${WANDB_PROJECT:-smartflip_ablation}"
@@ -58,8 +58,6 @@ COMMON_ARGS=(
   --lmhead-chunks "$LMHEAD_CHUNKS"
   --knee-tolerance "$BEST_KNEE"
   --max-flip-percent "$BEST_MAX_FLIP"
-  --results-models-dir "$RESULTS_MODELS_DIR"
-  --results-eval-dir "$RESULTS_EVAL_DIR"
   --calibration-cache-dir "$CALIBRATION_CACHE_DIR"
   --eval-cache-dir "$EVAL_CACHE_DIR"
   --seed "$SEED"
@@ -76,29 +74,48 @@ if [[ "$USE_WANDB" == "1" ]]; then
   fi
 fi
 
-case "$ABLATION_VARIANT" in
-  best)
-    VARIANT_ARGS=()
-    ;;
-  no_k|no_knee)
-    ABLATION_VARIANT="no_k"
-    VARIANT_ARGS=(--disable-knee-mask)
-    ;;
-  no_f|no_max_flip)
-    ABLATION_VARIANT="no_f"
-    VARIANT_ARGS=(--disable-max-flip-cap)
-    ;;
-  *)
-    echo "Unknown ABLATION_VARIANT=$ABLATION_VARIANT. Use best, no_k, or no_f." >&2
-    exit 2
-    ;;
-esac
+run_variant() {
+  local requested_variant="$1"
+  local variant
+  local -a variant_args
 
-run_name="awq_ablation_llama31_b${BITS}_${ABLATION_VARIANT}"
+  case "$requested_variant" in
+    best)
+      variant="best"
+      variant_args=()
+      ;;
+    no_k|no_knee)
+      variant="no_k"
+      variant_args=(--disable-knee-mask)
+      ;;
+    no_f|no_max_flip)
+      variant="no_f"
+      variant_args=(--disable-max-flip-cap)
+      ;;
+    *)
+      echo "Unknown ablation variant: $requested_variant. Use best, no_k, no_f, or all." >&2
+      exit 2
+      ;;
+  esac
 
-echo "==> ${run_name}"
-"$PYTHON_BIN" main.py quantize \
-  "${COMMON_ARGS[@]}" \
-  --run-name "$run_name" \
-  --wandb-tags ablation "bits:${BITS}" "variant:${ABLATION_VARIANT}" \
-  "${VARIANT_ARGS[@]}"
+  local run_name="awq_ablation_llama31_b${BITS}_${variant}"
+  local results_models_dir="${RESULTS_MODELS_ROOT}/${variant}"
+  local results_eval_dir="${RESULTS_EVAL_ROOT}/${variant}"
+
+  echo "==> ${run_name}"
+  "$PYTHON_BIN" main.py quantize \
+    "${COMMON_ARGS[@]}" \
+    --results-models-dir "$results_models_dir" \
+    --results-eval-dir "$results_eval_dir" \
+    --run-name "$run_name" \
+    --wandb-tags ablation "bits:${BITS}" "variant:${variant}" \
+    "${variant_args[@]}"
+}
+
+if [[ "$ABLATION_VARIANT" == "all" ]]; then
+  run_variant best
+  run_variant no_k
+  run_variant no_f
+else
+  run_variant "$ABLATION_VARIANT"
+fi
