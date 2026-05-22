@@ -61,6 +61,8 @@ class SmartFlipConfig:
     knee_tolerance: float = 0.0
     max_flip_percent: float = 0.05
     use_james_stein: bool = True
+    enable_knee_mask: bool = True
+    enable_max_flip_cap: bool = True
 
 
 class SmartFlipCorrection:
@@ -136,9 +138,11 @@ class SmartFlipCorrection:
         in_range = (w_int_proposed >= quant_state.min_int) & (w_int_proposed <= quant_state.max_int)
         valid_mask = valid_mask & in_range
 
-        outlier_threshold, outlier_percent = self.compute_dynamic_outlier_threshold(act_padded, debug=debug)
-        is_outlier = act_padded.abs() > outlier_threshold
-        valid_mask = valid_mask & (~is_outlier).unsqueeze(0)
+        outlier_percent = 0.0
+        if self.config.enable_knee_mask:
+            outlier_threshold, outlier_percent = self.compute_dynamic_outlier_threshold(act_padded, debug=debug)
+            is_outlier = act_padded.abs() > outlier_threshold
+            valid_mask = valid_mask & (~is_outlier).unsqueeze(0)
 
         rounding_costs = (quant_state.pre_round - quant_state.integer_weights).abs()
         rounding_costs_masked = rounding_costs.clone()
@@ -161,10 +165,11 @@ class SmartFlipCorrection:
         sorted_flip_dir = torch.gather(flip_dir, 1, sorted_indices)
         sorted_flip_dir[~final_flips_sorted] = 0.0
 
-        max_flips_per_output = int(self.config.max_flip_percent * quant_state.in_features)
-        cumsum_flips = final_flips_sorted.long().cumsum(dim=1)
-        within_limit = cumsum_flips <= max_flips_per_output
-        sorted_flip_dir[~within_limit] = 0.0
+        if self.config.enable_max_flip_cap:
+            max_flips_per_output = int(self.config.max_flip_percent * quant_state.in_features)
+            cumsum_flips = final_flips_sorted.long().cumsum(dim=1)
+            within_limit = cumsum_flips <= max_flips_per_output
+            sorted_flip_dir[~within_limit] = 0.0
 
         quant_state.integer_weights.scatter_add_(1, sorted_indices, sorted_flip_dir)
         quant_state.integer_weights.clamp_(quant_state.min_int, quant_state.max_int)
@@ -192,4 +197,3 @@ class SmartFlipCorrection:
             }
 
         return quant_state.dequantize_truncated(), outlier_percent, flip_stats
-
