@@ -109,14 +109,16 @@ python main.py quantize \
 
 ### 3. AWQ + smart_flip
 
+Standard run for AWQ on Mistral with `max_flip_percent = 0.05` and `knee_tolerance = 0`:
+
 ```bash
 python main.py quantize \
   --model-path mistralai/Mistral-7B-v0.3 \
   --origin-method awq \
   --post-correction smart_flip \
   --bits 4 \
-  --knee-tolerance 0.02 \
-  --max-flip-percent 0.03 \
+  --knee-tolerance 0 \
+  --max-flip-percent 0.05 \
   --run-name awq_smart_flip_mistral
 ```
 
