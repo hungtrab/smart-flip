@@ -57,15 +57,15 @@ def compute_james_stein_mean(raw_means: torch.Tensor, variance_estimate: Optiona
 
 
 @dataclass
-class SmartFlipConfig:
+class CLCConfig:
     knee_tolerance: float = 0.0
     max_flip_percent: float = 0.05
     use_james_stein: bool = True
 
 
-class SmartFlipCorrection:
-    def __init__(self, config: Optional[SmartFlipConfig] = None):
-        self.config = config or SmartFlipConfig()
+class CLCCorrection:
+    def __init__(self, config: Optional[CLCConfig] = None):
+        self.config = config or CLCConfig()
 
     @staticmethod
     def empty_flip_stats() -> dict:

@@ -7,18 +7,18 @@ class BashScriptTests(unittest.TestCase):
     def test_bash_scripts_follow_new_correction_origin_layout(self):
         base = Path("scripts/bash")
         expected = {
-            Path("smart_flip/awq/run_llama3.sh"),
-            Path("smart_flip/awq/run_llama31.sh"),
-            Path("smart_flip/awq/run_mistral.sh"),
-            Path("smart_flip/awq/run_qwen25.sh"),
-            Path("smart_flip/awq/run_awq_selected_egbc_b3.sh"),
-            Path("smart_flip/awq/run_llama31_b3.sh"),
-            Path("smart_flip/flatquant/run_llama3.sh"),
-            Path("smart_flip/flatquant/run_llama31.sh"),
-            Path("smart_flip/flatquant/run_mistral.sh"),
-            Path("smart_flip/flatquant/run_qwen25.sh"),
-            Path("smart_flip/flatquant/run_flatquant_llama3_egbc_b3.sh"),
-            Path("smart_flip/flatquant/run_flatquant_selected_egbc_b3.sh"),
+            Path("clc/awq/run_llama3.sh"),
+            Path("clc/awq/run_llama31.sh"),
+            Path("clc/awq/run_mistral.sh"),
+            Path("clc/awq/run_qwen25.sh"),
+            Path("clc/awq/run_awq_selected_egbc_b3.sh"),
+            Path("clc/awq/run_llama31_b3.sh"),
+            Path("clc/flatquant/run_llama3.sh"),
+            Path("clc/flatquant/run_llama31.sh"),
+            Path("clc/flatquant/run_mistral.sh"),
+            Path("clc/flatquant/run_qwen25.sh"),
+            Path("clc/flatquant/run_flatquant_llama3_egbc_b3.sh"),
+            Path("clc/flatquant/run_flatquant_selected_egbc_b3.sh"),
             Path("bias_correction/awq/run_llama3.sh"),
             Path("bias_correction/awq/run_llama31.sh"),
             Path("bias_correction/awq/run_mistral.sh"),
@@ -32,13 +32,13 @@ class BashScriptTests(unittest.TestCase):
         actual = {path.relative_to(base) for path in base.rglob("*.sh")}
         self.assertEqual(actual, expected)
 
-    def test_smart_flip_scripts_define_grid_search_per_origin_method(self):
+    def test_clc_scripts_define_grid_search_per_origin_method(self):
         scripts = {
-            "smart_flip/awq/run_llama3.sh": [
+            "clc/awq/run_llama3.sh": [
                 'FLOAT_ARGS=(',
                 'QUANT_BASE_ARGS=(',
                 'ORIGIN_METHOD="awq"',
-                'POST_CORRECTION="smart_flip"',
+                'POST_CORRECTION="clc"',
                 'KNEE_VALUES=(0.0 0.01 0.02 0.03 0.04 0.05)',
                 'MAX_FLIP_VALUES=(0.01 0.02 0.03 0.04 0.05)',
                 'for knee in "${KNEE_VALUES[@]}"; do',
@@ -48,11 +48,11 @@ class BashScriptTests(unittest.TestCase):
                 '--origin-method "$ORIGIN_METHOD"',
                 '--post-correction "$POST_CORRECTION"',
             ],
-            "smart_flip/flatquant/run_llama3.sh": [
+            "clc/flatquant/run_llama3.sh": [
                 'FLOAT_ARGS=(',
                 'QUANT_BASE_ARGS=(',
                 'ORIGIN_METHOD="flatquant"',
-                'POST_CORRECTION="smart_flip"',
+                'POST_CORRECTION="clc"',
                 'BITS_VALUES=(4)',
                 'KNEE_VALUES=(0.0 0.01 0.02 0.03 0.04 0.05)',
                 'MAX_FLIP_VALUES=(0.05 0.02 0.03 0.04 0.01)',
@@ -97,12 +97,12 @@ class BashScriptTests(unittest.TestCase):
                 self.assertIn(snippet, content, f"Missing {snippet!r} in {relative_path}")
 
 
-    def test_flatquant_smart_flip_scripts_can_skip_float_model(self):
+    def test_flatquant_clc_scripts_can_skip_float_model(self):
         for relative_path in [
-            "scripts/bash/smart_flip/flatquant/run_llama3.sh",
-            "scripts/bash/smart_flip/flatquant/run_llama31.sh",
-            "scripts/bash/smart_flip/flatquant/run_mistral.sh",
-            "scripts/bash/smart_flip/flatquant/run_qwen25.sh",
+            "scripts/bash/clc/flatquant/run_llama3.sh",
+            "scripts/bash/clc/flatquant/run_llama31.sh",
+            "scripts/bash/clc/flatquant/run_mistral.sh",
+            "scripts/bash/clc/flatquant/run_qwen25.sh",
         ]:
             content = Path(relative_path).read_text(encoding="utf-8")
             self.assertIn('RUN_FLOAT_MODEL="${RUN_FLOAT_MODEL:-1}"', content)
@@ -136,16 +136,16 @@ class BashScriptTests(unittest.TestCase):
             self.assertIn("\"$PYTHON_BIN\" main.py float_model", content)
 
 
-    def test_flatquant_smart_flip_scripts_include_model_slug_in_run_names(self):
+    def test_flatquant_clc_scripts_include_model_slug_in_run_names(self):
         for relative_path in [
-            "scripts/bash/smart_flip/flatquant/run_llama3.sh",
-            "scripts/bash/smart_flip/flatquant/run_llama31.sh",
-            "scripts/bash/smart_flip/flatquant/run_mistral.sh",
-            "scripts/bash/smart_flip/flatquant/run_qwen25.sh",
+            "scripts/bash/clc/flatquant/run_llama3.sh",
+            "scripts/bash/clc/flatquant/run_llama31.sh",
+            "scripts/bash/clc/flatquant/run_mistral.sh",
+            "scripts/bash/clc/flatquant/run_qwen25.sh",
         ]:
             content = Path(relative_path).read_text(encoding="utf-8")
             self.assertIn('MODEL_SLUG="${MODEL_PATH##*/}"', content)
-            self.assertIn('run_name="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"', content)
+            self.assertIn('run_name="${ORIGIN_METHOD}_clc_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"', content)
 
     def test_flatquant_bias_correction_scripts_include_model_slug_in_run_names(self):
         for relative_path in [
@@ -186,19 +186,19 @@ class BashScriptTests(unittest.TestCase):
             self.assertIn('RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"', content)
             self.assertIn('CORR_RUN_NAME="${CORR_RUN_NAME:-${ORIGIN_METHOD}_bias_correction_${MODEL_SLUG}}"', content)
 
-    def test_awq_qwen_smart_flip_script_can_skip_float_model(self):
-        content = Path("scripts/bash/smart_flip/awq/run_qwen25.sh").read_text(encoding="utf-8")
+    def test_awq_qwen_clc_script_can_skip_float_model(self):
+        content = Path("scripts/bash/clc/awq/run_qwen25.sh").read_text(encoding="utf-8")
         self.assertIn('RUN_FLOAT_MODEL="${RUN_FLOAT_MODEL:-1}"', content)
         self.assertIn('if [ "$RUN_FLOAT_MODEL" = "1" ]; then', content)
         self.assertIn('echo "==> skipping float_model :: ${MODEL_PATH}"', content)
         self.assertIn('"$PYTHON_BIN" main.py float_model', content)
 
-    def test_awq_qwen_smart_flip_script_includes_model_slug_in_run_names(self):
-        content = Path("scripts/bash/smart_flip/awq/run_qwen25.sh").read_text(encoding="utf-8")
+    def test_awq_qwen_clc_script_includes_model_slug_in_run_names(self):
+        content = Path("scripts/bash/clc/awq/run_qwen25.sh").read_text(encoding="utf-8")
         self.assertIn('MODEL_SLUG="${MODEL_PATH##*/}"', content)
         self.assertIn('FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"', content)
         self.assertIn('RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"', content)
-        self.assertIn('run_name="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"', content)
+        self.assertIn('run_name="${ORIGIN_METHOD}_clc_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"', content)
 
 if __name__ == "__main__":
     unittest.main()

@@ -69,63 +69,24 @@ if [ "$USE_WANDB" = "1" ]; then
   fi
 fi
 
-FLATQUANT_EPOCHS="${FLATQUANT_EPOCHS:-15}"
-FLATQUANT_CALI_BSZ="${FLATQUANT_CALI_BSZ:-4}"
-FLATQUANT_LR="${FLATQUANT_LR:-5e-3}"
-FLATQUANT_DIAG_INIT="${FLATQUANT_DIAG_INIT:-sq_style}"
-FLATQUANT_DIAG_ALPHA="${FLATQUANT_DIAG_ALPHA:-0.3}"
-FLATQUANT_CALI_TRANS="${FLATQUANT_CALI_TRANS:-1}"
-FLATQUANT_ADD_DIAG="${FLATQUANT_ADD_DIAG:-1}"
-FLATQUANT_LWC="${FLATQUANT_LWC:-1}"
-FLATQUANT_LAC="${FLATQUANT_LAC:-1}"
-
-add_flatquant_args() {
-  local -n args_ref=$1
-  args_ref+=(
-    --flatquant-epochs "$FLATQUANT_EPOCHS"
-    --flatquant-cali-bsz "$FLATQUANT_CALI_BSZ"
-    --flatquant-lr "$FLATQUANT_LR"
-    --flatquant-diag-init "$FLATQUANT_DIAG_INIT"
-    --flatquant-diag-alpha "$FLATQUANT_DIAG_ALPHA"
-  )
-  if [ "$FLATQUANT_CALI_TRANS" = "1" ]; then
-    args_ref+=(--flatquant-cali-trans)
-  else
-    args_ref+=(--no-flatquant-cali-trans)
-  fi
-  if [ "$FLATQUANT_ADD_DIAG" = "1" ]; then
-    args_ref+=(--flatquant-add-diag)
-  else
-    args_ref+=(--no-flatquant-add-diag)
-  fi
-  if [ "$FLATQUANT_LWC" = "1" ]; then
-    args_ref+=(--flatquant-lwc)
-  else
-    args_ref+=(--no-flatquant-lwc)
-  fi
-  if [ "$FLATQUANT_LAC" = "1" ]; then
-    args_ref+=(--flatquant-lac)
-  else
-    args_ref+=(--no-flatquant-lac)
-  fi
-}
-
-ORIGIN_METHOD="flatquant"
-POST_CORRECTION="smart_flip"
+ORIGIN_METHOD="awq"
+POST_CORRECTION="clc"
 BITS="3"
 
 MODEL_PATHS=(
   "mistralai/Mistral-7B-v0.3"
   "meta-llama/Meta-Llama-3.1-8B"
   "Qwen/Qwen2.5-7B"
+  "meta-llama/Meta-Llama-3-8B"
 )
 
 get_params_for_model() {
   local model_path="$1"
   case "$model_path" in
-    "mistralai/Mistral-7B-v0.3") echo "0.0 0.05" ;;
-    "meta-llama/Meta-Llama-3.1-8B") echo "0.0 0.05" ;;
-    "Qwen/Qwen2.5-7B") echo "0.01 0.05" ;;
+    "mistralai/Mistral-7B-v0.3") echo "0.02 0.02" ;;
+    "meta-llama/Meta-Llama-3.1-8B") echo "0.02 0.01" ;;
+    "Qwen/Qwen2.5-7B") echo "0.03 0.02" ;;
+    "meta-llama/Meta-Llama-3-8B") echo "0.01 0.05" ;;
     *) echo "Unknown model: $model_path" >&2; return 1 ;;
   esac
 }
@@ -136,8 +97,7 @@ for model_path in "${MODEL_PATHS[@]}"; do
   MODEL_SLUG="${model_path##*/}"
   FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
   RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
-  RAW_MODEL_DIR="${RAW_MODEL_DIR:-${RESULTS_MODELS_DIR}/${ORIGIN_METHOD}_raw/${RAW_RUN_NAME}}"
-  RUN_NAME="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${BITS}_k${knee}_f${max_flip}"
+  RUN_NAME="${ORIGIN_METHOD}_clc_${MODEL_SLUG}_b${BITS}_k${knee}_f${max_flip}"
 
   FLOAT_ARGS=("${FLOAT_ARGS_BASE[@]}" --model-path "$model_path")
   QUANT_BASE_ARGS=("${QUANT_BASE_ARGS_BASE[@]}" --model-path "$model_path")
@@ -158,17 +118,12 @@ for model_path in "${MODEL_PATHS[@]}"; do
       --run-name "$RAW_RUN_NAME"
       --bits "$BITS"
     )
-    add_flatquant_args RAW_ARGS
     "$PYTHON_BIN" main.py quantize "${RAW_ARGS[@]}"
   else
-    if [ ! -f "$RAW_MODEL_DIR/flat_parameters.pth" ]; then
-      echo "Missing raw FlatQuant parameters at ${RAW_MODEL_DIR}/flat_parameters.pth" >&2
-      exit 1
-    fi
-    echo "==> skipping raw_quantize :: ${model_path} :: using existing raw model at ${RAW_MODEL_DIR}"
+    echo "==> skipping raw_quantize :: ${model_path}"
   fi
 
-  echo "==> smart_flip :: ${model_path} :: origin=${ORIGIN_METHOD} :: bits=${BITS} :: knee=${knee} :: max_flip=${max_flip}"
+  echo "==> clc :: ${model_path} :: origin=${ORIGIN_METHOD} :: bits=${BITS} :: knee=${knee} :: max_flip=${max_flip}"
   QUANT_ARGS=(
     "${QUANT_BASE_ARGS[@]}"
     --origin-method "$ORIGIN_METHOD"
@@ -177,9 +132,7 @@ for model_path in "${MODEL_PATHS[@]}"; do
     --knee-tolerance "$knee"
     --max-flip-percent "$max_flip"
     --run-name "$RUN_NAME"
-    --flatquant-raw-path "$RAW_MODEL_DIR"
   )
-  add_flatquant_args QUANT_ARGS
   "$PYTHON_BIN" main.py quantize "${QUANT_ARGS[@]}"
 done
 

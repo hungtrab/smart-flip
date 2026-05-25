@@ -1,9 +1,9 @@
 from src.post_correction.bias_correction import BiasCorrectionConfig, BiasCorrectionCorrection
-from src.post_correction.smart_flip import SmartFlipConfig, SmartFlipCorrection
+from src.post_correction.clc import CLCConfig, CLCCorrection
 
 __all__ = [
     "BiasCorrectionConfig",
     "BiasCorrectionCorrection",
-    "SmartFlipConfig",
-    "SmartFlipCorrection",
+    "CLCConfig",
+    "CLCCorrection",
 ]

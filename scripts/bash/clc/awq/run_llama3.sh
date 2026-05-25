@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-mistralai/Mistral-7B-v0.3}"
+MODEL_PATH="${MODEL_PATH:-meta-llama/Meta-Llama-3-8B}"
 MODELS_ROOT="${MODELS_ROOT:-/models}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 RESULTS_MODELS_DIR="${RESULTS_MODELS_DIR:-./results/models}"
@@ -71,7 +71,7 @@ if [ "$USE_WANDB" = "1" ]; then
 fi
 
 ORIGIN_METHOD="awq"
-POST_CORRECTION="smart_flip"
+POST_CORRECTION="clc"
 FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw}"
 BITS_VALUES=(4)
@@ -95,8 +95,8 @@ RAW_ARGS=(
 for bits in "${BITS_VALUES[@]}"; do
   for knee in "${KNEE_VALUES[@]}"; do
     for max_flip in "${MAX_FLIP_VALUES[@]}"; do
-      run_name="${ORIGIN_METHOD}_smart_flip_b${bits}_k${knee}_f${max_flip}"
-      echo "==> smart_flip :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
+      run_name="${ORIGIN_METHOD}_clc_b${bits}_k${knee}_f${max_flip}"
+      echo "==> clc :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
       QUANT_ARGS=(
         "${QUANT_BASE_ARGS[@]}"
         --origin-method "$ORIGIN_METHOD"

@@ -17,7 +17,7 @@ from src.quantization.state import IntegerQuantizedTensorState
 
 if TYPE_CHECKING:
     from src.post_correction.bias_correction import BiasCorrectionCorrection
-    from src.post_correction.smart_flip import SmartFlipCorrection
+    from src.post_correction.clc import CLCCorrection
 
 
 @dataclass
@@ -107,7 +107,7 @@ class FlatQuantRTNQuantizer:
         tokenizer,
         device: str = "cuda",
         config: Optional[FlatQuantConfig] = None,
-        post_correction: Optional["SmartFlipCorrection | BiasCorrectionCorrection"] = None,
+        post_correction: Optional["CLCCorrection | BiasCorrectionCorrection"] = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -192,7 +192,7 @@ class FlatQuantRTNQuantizer:
 
     def _build_flatquant_args(self, nsamples: int) -> SimpleNamespace:
         model_name = getattr(self.model, "name_or_path", None) or getattr(self.model.config, "_name_or_path", "model")
-        artifact_dir = self._artifact_dir or "./results/models/smart-flip-flatquant"
+        artifact_dir = self._artifact_dir or "./results/models/clc-flatquant"
         return SimpleNamespace(
             model=model_name,
             seed=0,

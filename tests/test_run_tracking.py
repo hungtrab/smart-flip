@@ -54,7 +54,7 @@ class RunTrackingTests(unittest.TestCase):
             run_name="demo",
             results_eval_dir="./results/eval",
             use_wandb=True,
-            wandb_project="smart-flip",
+            wandb_project="clc",
             wandb_entity=None,
             wandb_tags=[],
         )
@@ -138,7 +138,7 @@ class RunTrackingTests(unittest.TestCase):
 
     def test_log_results_to_wandb_uses_filtered_metrics_only(self):
         args = SimpleNamespace(
-            wandb_project="smart-flip",
+            wandb_project="clc",
             wandb_entity=None,
             wandb_tags=[],
             model_path="mistralai/Mistral-7B-v0.3",

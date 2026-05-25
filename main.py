@@ -108,7 +108,7 @@ def build_auto_run_name(variant: str, args, timestamp: str | None = None) -> str
         parts.append(f"b{args.bits}")
     if hasattr(args, "group_size"):
         parts.append(f"g{args.group_size}")
-    if variant.endswith("_flip") or "smart_flip" in variant:
+    if variant.endswith("_flip") or "clc" in variant:
         if hasattr(args, "knee_tolerance"):
             parts.append(f"k{normalize_run_value(args.knee_tolerance)}")
         if hasattr(args, "max_flip_percent"):
@@ -450,7 +450,7 @@ def run_raw_quantize(args):
 
 
 def run_flip_quantize(args):
-    args.post_correction = "smart_flip"
+    args.post_correction = "clc"
     run_quantize_with_evaluation(args)
 
 def run_compare_all(args):
@@ -486,7 +486,7 @@ def build_parser():
         cmd.add_argument("--lm-eval-output-dir", default="./results/eval/lm_eval")
         cmd.add_argument("--use-wandb", action="store_true", default=False)
         cmd.add_argument("--no-wandb", dest="use_wandb", action="store_false")
-        cmd.add_argument("--wandb-project", default="smartflip")
+        cmd.add_argument("--wandb-project", default="clc")
         cmd.add_argument("--wandb-entity", default=None)
         cmd.add_argument("--wandb-tags", nargs="*", default=[])
 
@@ -533,7 +533,7 @@ def build_parser():
 
     quantize = subparsers.add_parser("quantize", help="Quantize with AWQ and an optional post-correction, then evaluate that model")
     add_quant_args(quantize)
-    quantize.add_argument("--post-correction", choices=["none", "smart_flip", "bias_correction"], default="none")
+    quantize.add_argument("--post-correction", choices=["none", "clc", "bias_correction"], default="none")
     quantize.add_argument("--flatquant-raw-path", default=None)
     quantize.set_defaults(func=run_quantize_with_evaluation)
 
@@ -545,7 +545,7 @@ def build_parser():
     flip_quantize = subparsers.add_parser("flip_quantize", help="Quantize with AWQ plus smart flip, then evaluate that model")
     add_quant_args(flip_quantize)
     flip_quantize.add_argument("--flatquant-raw-path", default=None)
-    flip_quantize.set_defaults(func=run_flip_quantize, post_correction="smart_flip")
+    flip_quantize.set_defaults(func=run_flip_quantize, post_correction="clc")
 
     compare_all = subparsers.add_parser("compare_all", help="Evaluate float_model, raw_quantize, and flip_quantize together")
     compare_all.add_argument("--model-path", required=True, help="HF model name or local model path for the float model")

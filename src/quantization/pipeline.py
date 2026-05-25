@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.post_correction.bias_correction import BiasCorrectionConfig, BiasCorrectionCorrection
-from src.post_correction.smart_flip import SmartFlipConfig, SmartFlipCorrection
+from src.post_correction.clc import CLCConfig, CLCCorrection
 from src.quantization.awq import AWQConfig, AWQQuantizerXL
 from src.quantization.awq_bias_correction import AWQBiasCorrectionQuantizerXL
 from src.quantization.flatquant import FlatQuantConfig, FlatQuantRTNQuantizer
@@ -58,9 +58,9 @@ def build_flatquant_config(args) -> FlatQuantConfig:
 def build_post_correction(args, recipe: QuantizationRecipe):
     if recipe.post_correction == "none":
         return None
-    if recipe.post_correction == "smart_flip":
-        return SmartFlipCorrection(
-            SmartFlipConfig(
+    if recipe.post_correction == "clc":
+        return CLCCorrection(
+            CLCConfig(
                 knee_tolerance=args.knee_tolerance,
                 max_flip_percent=args.max_flip_percent,
                 use_james_stein=args.use_james_stein,

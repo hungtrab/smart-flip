@@ -11,7 +11,7 @@ import torch
 
 import src.calibration as calibration
 from src.post_correction.bias_correction import BiasCorrectionConfig, BiasCorrectionCorrection
-from src.post_correction.smart_flip import SmartFlipConfig, SmartFlipCorrection
+from src.post_correction.clc import CLCConfig, CLCCorrection
 from src.quantization.awq import AWQConfig, AWQQuantizerXL
 from src.quantization.flatquant import FlatQuantConfig, FlatQuantRTNQuantizer, _ActivationCollector
 from src.quantization.pipeline import QuantizationRecipe, create_quantizer
@@ -50,12 +50,12 @@ class QuantizationAssemblyTests(unittest.TestCase):
             "flatquant_raw",
         )
         self.assertEqual(
-            QuantizationRecipe(origin_method="awq", post_correction="smart_flip").variant_name,
-            "awq_smart_flip",
+            QuantizationRecipe(origin_method="awq", post_correction="clc").variant_name,
+            "awq_clc",
         )
         self.assertEqual(
-            QuantizationRecipe(origin_method="flatquant", post_correction="smart_flip").variant_name,
-            "flatquant_smart_flip",
+            QuantizationRecipe(origin_method="flatquant", post_correction="clc").variant_name,
+            "flatquant_clc",
         )
         self.assertEqual(
             QuantizationRecipe(origin_method="awq", post_correction="bias_correction").variant_name,
@@ -77,8 +77,8 @@ class QuantizationAssemblyTests(unittest.TestCase):
         self.assertIsNone(correction)
         self.assertIsNone(quantizer.post_correction)
 
-    def test_create_quantizer_builds_awq_with_smart_flip_post_correction(self):
-        recipe = QuantizationRecipe(origin_method="awq", post_correction="smart_flip")
+    def test_create_quantizer_builds_awq_with_clc_post_correction(self):
+        recipe = QuantizationRecipe(origin_method="awq", post_correction="clc")
         quantizer, base_config, correction = create_quantizer(
             model=object(),
             tokenizer=object(),
@@ -89,8 +89,8 @@ class QuantizationAssemblyTests(unittest.TestCase):
 
         self.assertIsInstance(quantizer, AWQQuantizerXL)
         self.assertIsInstance(base_config, AWQConfig)
-        self.assertIsInstance(correction, SmartFlipCorrection)
-        self.assertIsInstance(correction.config, SmartFlipConfig)
+        self.assertIsInstance(correction, CLCCorrection)
+        self.assertIsInstance(correction.config, CLCConfig)
         self.assertIs(quantizer.post_correction, correction)
 
     def test_create_quantizer_builds_awq_with_bias_correction_post_correction(self):
@@ -109,8 +109,8 @@ class QuantizationAssemblyTests(unittest.TestCase):
         self.assertIsInstance(correction.config, BiasCorrectionConfig)
         self.assertIs(quantizer.post_correction, correction)
 
-    def test_create_quantizer_builds_flatquant_with_smart_flip_post_correction(self):
-        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="smart_flip")
+    def test_create_quantizer_builds_flatquant_with_clc_post_correction(self):
+        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="clc")
         quantizer, base_config, correction = create_quantizer(
             model=SimpleNamespace(config=SimpleNamespace(model_type="llama", _name_or_path="meta-llama/Llama-3-8B")),
             tokenizer=object(),
@@ -121,7 +121,7 @@ class QuantizationAssemblyTests(unittest.TestCase):
 
         self.assertIsInstance(quantizer, FlatQuantRTNQuantizer)
         self.assertIsInstance(base_config, FlatQuantConfig)
-        self.assertIsInstance(correction, SmartFlipCorrection)
+        self.assertIsInstance(correction, CLCCorrection)
         self.assertEqual(base_config.w_bits, 4)
         self.assertEqual(base_config.a_bits, 4)
         self.assertEqual(base_config.k_bits, 16)
@@ -468,7 +468,7 @@ class CalibrationCacheTests(unittest.TestCase):
         utils.distribute_model = lambda _model: None
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            exp_dir = Path(tmpdir) / "nested" / "smart-flip-flatquant"
+            exp_dir = Path(tmpdir) / "nested" / "clc-flatquant"
             flatquant_args = quantizer._build_flatquant_args(0)
             flatquant_args.exp_dir = str(exp_dir)
             quantizer._build_flatquant_args = lambda _nsamples: flatquant_args
@@ -537,7 +537,7 @@ class CalibrationCacheTests(unittest.TestCase):
         self.assertTrue(seen["grad_enabled"])
 
     def test_run_flatquant_raw_returns_trainloader_and_args(self):
-        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="smart_flip")
+        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="clc")
         model = SimpleNamespace(config=SimpleNamespace(model_type="llama", _name_or_path="meta-llama/Llama-3-8B"), seqlen=16)
         model.eval = lambda: model
         model.to = lambda _device: model
@@ -601,7 +601,7 @@ class CalibrationCacheTests(unittest.TestCase):
                     sys.modules[name] = module
 
     def test_run_flatquant_raw_reuses_saved_flat_parameters_without_recalibration(self):
-        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="smart_flip")
+        recipe = QuantizationRecipe(origin_method="flatquant", post_correction="clc")
         model = SimpleNamespace(config=SimpleNamespace(model_type="llama", _name_or_path="meta-llama/Llama-3-8B"), seqlen=16)
         model.eval = lambda: model
         model.to = lambda _device: model

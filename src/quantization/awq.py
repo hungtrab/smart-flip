@@ -18,7 +18,7 @@ except ImportError:
     HAS_PSUTIL = False
 
 if TYPE_CHECKING:
-    from src.post_correction.smart_flip import SmartFlipCorrection
+    from src.post_correction.clc import CLCCorrection
 
 
 @dataclass
@@ -38,7 +38,7 @@ class AWQQuantizerXL:
         tokenizer,
         device: str = "cuda",
         config: Optional[AWQConfig] = None,
-        post_correction: Optional["SmartFlipCorrection"] = None,
+        post_correction: Optional["CLCCorrection"] = None,
     ):
         self.model = model
         self.tokenizer = tokenizer

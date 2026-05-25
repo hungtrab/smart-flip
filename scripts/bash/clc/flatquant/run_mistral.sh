@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-7B}"
+MODEL_PATH="${MODEL_PATH:-mistralai/Mistral-7B-v0.3}"
 MODELS_ROOT="${MODELS_ROOT:-/models}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 RESULTS_MODELS_DIR="${RESULTS_MODELS_DIR:-./results/models}"
@@ -114,14 +114,14 @@ add_flatquant_args() {
 }
 
 ORIGIN_METHOD="flatquant"
-POST_CORRECTION="smart_flip"
+POST_CORRECTION="clc"
 MODEL_SLUG="${MODEL_PATH##*/}"
 FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
 RAW_MODEL_DIR="${RAW_MODEL_DIR:-${RESULTS_MODELS_DIR}/${ORIGIN_METHOD}_raw/${RAW_RUN_NAME}}"
 BITS_VALUES=(4)
 KNEE_VALUES=(0.0 0.01 0.02 0.03 0.04 0.05)
-MAX_FLIP_VALUES=(0.01 0.02 0.03 0.04 0.05)
+MAX_FLIP_VALUES=(0.05 0.02 0.03 0.04 0.01)
 
 if [ "$RUN_FLOAT_MODEL" = "1" ]; then
   echo "==> float_model :: ${MODEL_PATH}"
@@ -152,8 +152,8 @@ fi
 for bits in "${BITS_VALUES[@]}"; do
   for knee in "${KNEE_VALUES[@]}"; do
     for max_flip in "${MAX_FLIP_VALUES[@]}"; do
-      run_name="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"
-      echo "==> smart_flip :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
+      run_name="${ORIGIN_METHOD}_clc_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"
+      echo "==> clc :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
       QUANT_ARGS=(
         "${QUANT_BASE_ARGS[@]}"
         --origin-method "$ORIGIN_METHOD"

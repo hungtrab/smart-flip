@@ -61,7 +61,7 @@ class ParserModeTests(unittest.TestCase):
 
         flip_args = parser.parse_args(["flip_quantize", "--model-path", "dummy-model"])
         self.assertEqual(flip_args.origin_method, "awq")
-        self.assertEqual(flip_args.post_correction, "smart_flip")
+        self.assertEqual(flip_args.post_correction, "clc")
         self.assertTrue(flip_args.include_lm_eval)
         self.assertEqual(flip_args.lm_eval_task_preset, "extended")
         self.assertIn("lambada_openai", flip_args.lm_eval_tasks)
@@ -171,7 +171,7 @@ class ParserModeTests(unittest.TestCase):
         self.assertEqual(resolved, "mistralai/Mistral-7B-v0.3")
 
 
-    def test_build_auto_run_name_includes_model_slug_for_smart_flip_variants(self):
+    def test_build_auto_run_name_includes_model_slug_for_clc_variants(self):
         args = SimpleNamespace(
             model_path="meta-llama/Meta-Llama-3-8B",
             resolved_source_model="meta-llama/Meta-Llama-3-8B",
@@ -182,9 +182,9 @@ class ParserModeTests(unittest.TestCase):
             seed=42,
         )
 
-        run_name = main.build_auto_run_name("flatquant_smart_flip", args, timestamp="20260410-120000")
+        run_name = main.build_auto_run_name("flatquant_clc", args, timestamp="20260410-120000")
 
-        self.assertEqual(run_name, "flatquant_smart_flip_Meta-Llama-3-8B_b4_g128_k0_f0p05_s42_20260410-120000")
+        self.assertEqual(run_name, "flatquant_clc_Meta-Llama-3-8B_b4_g128_k0_f0p05_s42_20260410-120000")
 
     def test_evaluate_model_paths_runs_both_evaluators_by_default(self):
         args = SimpleNamespace(
@@ -381,7 +381,7 @@ class ParserModeTests(unittest.TestCase):
             "--origin-method",
             "flatquant",
             "--post-correction",
-            "smart_flip",
+            "clc",
             "--flatquant-raw-path",
             "./results/models/flatquant_raw/raw-run",
         ])

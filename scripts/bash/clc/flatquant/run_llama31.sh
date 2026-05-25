@@ -114,7 +114,7 @@ add_flatquant_args() {
 }
 
 ORIGIN_METHOD="flatquant"
-POST_CORRECTION="smart_flip"
+POST_CORRECTION="clc"
 MODEL_SLUG="${MODEL_PATH##*/}"
 FLOAT_RUN_NAME="${FLOAT_RUN_NAME:-${ORIGIN_METHOD}_float_${MODEL_SLUG}}"
 RAW_RUN_NAME="${RAW_RUN_NAME:-${ORIGIN_METHOD}_raw_${MODEL_SLUG}}"
@@ -152,8 +152,8 @@ fi
 for bits in "${BITS_VALUES[@]}"; do
   for knee in "${KNEE_VALUES[@]}"; do
     for max_flip in "${MAX_FLIP_VALUES[@]}"; do
-      run_name="${ORIGIN_METHOD}_smart_flip_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"
-      echo "==> smart_flip :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
+      run_name="${ORIGIN_METHOD}_clc_${MODEL_SLUG}_b${bits}_k${knee}_f${max_flip}"
+      echo "==> clc :: ${MODEL_PATH} :: origin=${ORIGIN_METHOD} :: bits=${bits} :: knee=${knee} :: max_flip=${max_flip}"
       QUANT_ARGS=(
         "${QUANT_BASE_ARGS[@]}"
         --origin-method "$ORIGIN_METHOD"
