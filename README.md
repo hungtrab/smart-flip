@@ -1,34 +1,37 @@
 # CLC
 
-`CLC` is a research and experimentation repo for quantization, centered on:
+CLC is a research framework for **weight-only post-training quantization (PTQ)** of large language models. It pairs standard quantizers (AWQ, FlatQuant) with a lightweight correction stage, **CLC**, that refines the quantized weights so that the layer output stays close to the original float output.
 
-- `awq`
-- `flatquant`
-- the `clc` and `bias_correction` post-correction stages
-- perplexity evaluation and the `lm-evaluation-harness`
+Everything runs through a single entrypoint, `main.py`. The scripts under `scripts/bash/` are thin wrappers around it for running the common recipes on a given model.
 
-The main entrypoint is `main.py`. The scripts under `scripts/bash/` are just wrappers for running common recipes quickly.
+## What CLC does
 
-> **Supported quantization methods:** only `awq` and `flatquant`.
-> The `gptq` backend has been fully removed from the repo (quantizer, `--gptq-*`
-> CLI flags, wrapper scripts and related tests). FlatQuant still performs
-> round-to-nearest weight quantization through the `rtn_utils.py` helper. Any
-> leftover `gptq` strings live only inside the vendored FlatQuant library
-> (`flatquant/`), which is not reached by the main flow.
+A uniform quantizer rounds each weight to the nearest grid point. This minimizes the per-weight rounding error, but it ignores how that error propagates to the layer output once it is multiplied by the activations. As a result, the rounding noise can accumulate into a structured bias at the output.
+
+CLC is a post-correction step applied right after quantization. For each output channel it looks at the rounding decisions and selectively **flips** a small number of them (rounding up instead of down, or vice versa) so that the expected output error — measured against the activation statistics — is reduced. It is fast, calibration-light, and applied on top of an existing quantized model rather than retraining it.
+
+Three ideas keep the correction stable:
+
+- **Expectation under activations.** Weight adjustments are scored by their estimated effect on the output, using per-channel activation means rather than raw weight error.
+- **James–Stein shrinkage** (`--use-james-stein`, on by default) shrinks the per-channel mean estimates toward their grand mean, reducing variance when the calibration set is small.
+- **Knee-based outlier masking** (`--knee-tolerance`) detects the transition point in the sorted activation magnitudes and leaves the most extreme channels untouched, so a few large activations do not dominate the correction.
+- **A per-output flip budget** (`--max-flip-percent`) caps how many weights may be flipped per output channel, keeping the change small and well-conditioned.
+
+CLC works as a post-correction stage on either an AWQ or a FlatQuant base, and sits alongside a simpler `bias_correction` stage.
 
 ## Repository layout
 
-- `main.py`: main CLI for quantization and evaluation
-- `src/quantization/`: quantization pipeline, AWQ, FlatQuant adapter, bias correction
-- `rtn_utils.py`: round-to-nearest helper (`rtn_fwrd`, `find_qlayers`) used by the FlatQuant flow
-- `src/post_correction/`: `clc` and the other correction stages
-- `src/evaluation/`: standard evaluation and FlatQuant-specific evaluation
-- `flatquant/`: the original FlatQuant code, vendored and reused by this repo
-- `scripts/bash/`: `.sh` wrappers to run quickly per model family and recipe
-- `datasets/`: local datasets some FlatQuant loaders need
-- `data/cache/`: runtime calibration/evaluation cache
-- `results/models/`: model artifacts after quantization
-- `results/eval/`: evaluation result JSON
+- `main.py` — the CLI for quantization and evaluation
+- `src/quantization/` — quantization pipeline, AWQ and FlatQuant adapters, bias correction
+- `src/post_correction/` — the `clc` correction and other post-correction stages
+- `rtn_utils.py` — round-to-nearest helper used by the FlatQuant flow
+- `src/evaluation/` — perplexity evaluation and `lm-evaluation-harness` integration
+- `flatquant/` — the FlatQuant library, vendored and reused
+- `scripts/bash/` — `.sh` wrappers grouped by correction stage and model family
+- `datasets/` — local datasets that some FlatQuant loaders read
+- `data/cache/` — runtime calibration/evaluation cache
+- `results/models/` — quantized model artifacts
+- `results/eval/` — evaluation results (JSON)
 
 ## Installation
 
@@ -36,66 +39,64 @@ The main entrypoint is `main.py`. The scripts under `scripts/bash/` are just wra
 pip install -r requirements.txt
 ```
 
-If you use a private Hugging Face model or want to log to W&B, create a `.env` file at the repo root:
+To use a private Hugging Face model or log to Weights & Biases, create a `.env` file at the repo root:
 
 ```bash
 HF_TOKEN=...
 WANDB_API_KEY=...
 ```
 
-`main.py` loads `.env` automatically if the file exists.
+`main.py` loads `.env` automatically when it exists.
 
-## How the repo works
+## Concepts
 
 There are two main flows:
 
-1. `float_model`
-   Evaluate the original float model.
-2. `quantize`
-   Quantize and then evaluate right after.
+1. `float_model` — evaluate the original float model.
+2. `quantize` — quantize, then immediately evaluate the result.
 
-`quantize` is configured by:
+`quantize` is configured by two choices:
 
-- `--origin-method awq|flatquant`
-- `--post-correction none|clc|bias_correction`
+- `--origin-method awq|flatquant` — the base quantizer
+- `--post-correction none|clc|bias_correction` — the correction applied on top
 
-The remaining modes are essentially shortcuts:
+The other modes are shortcuts:
 
-- `raw_quantize` = `post_correction=none`
-- `flip_quantize` = `post_correction=clc`
-- `compare_all` = evaluate `float`, `raw`, and `flip` together
+- `raw_quantize` = `--post-correction none`
+- `flip_quantize` = `--post-correction clc`
+- `compare_all` = evaluate `float`, `raw`, and corrected models together
 
-## Model path resolution
+### Model path resolution
 
 `--model-path` is resolved in this order:
 
-1. use it directly if it is an existing local path
-2. try `<models_root>/<model_path>`, where `--models-root` defaults to `/models`
-3. otherwise treat it as a Hugging Face model id
+1. used directly if it is an existing local path
+2. otherwise tried as `<models_root>/<model_path>` (`--models-root` defaults to `/models`)
+3. otherwise treated as a Hugging Face model id
 
-Examples:
+```bash
+--model-path /models/Mistral-7B-v0.3
+--model-path Mistral-7B-v0.3 --models-root /models
+--model-path mistralai/Mistral-7B-v0.3
+```
 
-- `--model-path /models/Mistral-7B-v0.3`
-- `--model-path Mistral-7B-v0.3 --models-root /models`
-- `--model-path mistralai/Mistral-7B-v0.3`
+## Usage
 
-## Available CLI
-
-See the help:
+Inspect the CLI any time:
 
 ```bash
 python main.py -h
 python main.py quantize -h
 ```
 
-### 1. Evaluate a float model
+### Evaluate a float model
 
 ```bash
 python main.py float_model \
   --model-path mistralai/Mistral-7B-v0.3
 ```
 
-### 2. AWQ raw
+### AWQ (raw, no correction)
 
 ```bash
 python main.py quantize \
@@ -106,9 +107,9 @@ python main.py quantize \
   --run-name awq_raw_mistral
 ```
 
-### 3. AWQ + clc
+### AWQ + CLC
 
-Standard run for AWQ on Mistral with `max_flip_percent = 0.05` and `knee_tolerance = 0`:
+A standard run on Mistral with `max_flip_percent = 0.05` and `knee_tolerance = 0`:
 
 ```bash
 python main.py quantize \
@@ -121,7 +122,9 @@ python main.py quantize \
   --run-name awq_clc_mistral
 ```
 
-### 4. AWQ + bias_correction
+`--knee-tolerance` and `--max-flip-percent` are the two main knobs: the first controls how aggressively outlier channels are masked, the second caps the per-output flip budget.
+
+### AWQ + bias correction
 
 ```bash
 python main.py quantize \
@@ -133,7 +136,7 @@ python main.py quantize \
   --run-name awq_bias_correction_mistral
 ```
 
-### 5. FlatQuant raw
+### FlatQuant (raw)
 
 ```bash
 python main.py quantize \
@@ -147,9 +150,9 @@ python main.py quantize \
   --run-name flatquant_raw_mistral
 ```
 
-### 6. FlatQuant + clc
+### FlatQuant + CLC
 
-With `flatquant`, correction recipes reference the previously produced raw artifact via `--flatquant-raw-path`.
+FlatQuant correction recipes reuse a previously produced raw artifact via `--flatquant-raw-path`:
 
 ```bash
 python main.py quantize \
@@ -157,13 +160,13 @@ python main.py quantize \
   --origin-method flatquant \
   --post-correction clc \
   --bits 4 \
-  --knee-tolerance 0.02 \
-  --max-flip-percent 0.03 \
+  --knee-tolerance 0 \
+  --max-flip-percent 0.05 \
   --flatquant-raw-path ./results/models/flatquant_raw/flatquant_raw_mistral \
   --run-name flatquant_clc_mistral
 ```
 
-### 7. FlatQuant + bias_correction
+### FlatQuant + bias correction
 
 ```bash
 python main.py quantize \
@@ -176,7 +179,7 @@ python main.py quantize \
   --run-name flatquant_bias_correction_mistral
 ```
 
-### 8. Compare all
+### Compare several models
 
 ```bash
 python main.py compare_all \
@@ -185,135 +188,24 @@ python main.py compare_all \
   --flip-path ./results/models/awq_clc/awq_clc_mistral
 ```
 
-## Evaluation
+## Running with the bash wrappers
 
-Every evaluation run writes JSON into `results/eval/`.
-
-The repo has two evaluation flows:
-
-- the default flow in `src/evaluation/sliding_window.py`
-  - downloads WikiText-2 and C4 via Hugging Face
-  - caches into `data/cache/eval`
-- the FlatQuant flow in `src/evaluation/flatquant_runner.py`
-  - uses the local dataset scripts under `datasets/`
-  - requires local data under `CLC/datasets`
-
-Defaults:
-
-- WikiText-2 enabled
-- C4 enabled
-- `lm_eval` enabled
-- default `lm_eval` preset is `extended`
-
-Some useful options:
-
-- `--no-c4`
-- `--no-lm-eval`
-- `--lm-eval-task-preset core|extended`
-- `--lm-eval-tasks ...`
-- `--use-wandb`
-
-## Datasets and cache
-
-Two distinct concepts:
-
-1. `data/cache/...`
-   Runtime cache the repo creates while running calibration/evaluation.
-2. `datasets/...`
-   Local datasets that some FlatQuant loaders read directly.
-
-### Default datasets for `main.py`
-
-For the usual AWQ flows and sliding-window evaluation, the repo downloads data via Hugging Face:
-
-- `c4` calibration in `src/calibration.py`
-- WikiText-2 test in `src/evaluation/sliding_window.py`
-- C4 validation in `src/evaluation/sliding_window.py`
-
-You do not need to manually download anything into `CLC/datasets` just to use these flows.
-
-### Local datasets required by FlatQuant
-
-The FlatQuant loaders in the following files read local datasets:
-
-- `flatquant/data_utils.py`
-- `src/evaluation/flatquant_data_utils.py`
-
-They look for data in:
-
-- `datasets/wikitext`
-- `datasets/allenai/c4`
-- `datasets/ptb_text_only`
-- `datasets/pile-val-backup`
-
-In practice, at minimum prepare `datasets/wikitext`, since the repo ships a dataset script and this is the most common pitfall when running the FlatQuant evaluation flow.
-
-### Downloading WikiText-2 into `CLC/datasets`
-
-The repo ships the script `datasets/wikitext/wikitext.py`, which reads a local zip file:
-
-- `datasets/wikitext/wikitext-2-raw-v1.zip`
-
-How to download:
-
-```bash
-mkdir -p datasets/wikitext
-cd datasets/wikitext
-wget -O wikitext-2-raw-v1.zip \
-  "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip?download=true"
-cd /workspace/CLC
-```
-
-After downloading, the layout should look like:
-
-```text
-CLC/
-  datasets/
-    wikitext/
-      wikitext.py
-      wikitext-2-raw-v1.zip
-```
-
-### Other local datasets for FlatQuant
-
-If you use the corresponding FlatQuant loaders, place the data as follows:
-
-- `datasets/allenai/c4/en/c4-train.00000-of-01024.json.gz`
-- `datasets/allenai/c4/en/c4-validation.00000-of-00008.json.gz`
-- `datasets/ptb_text_only/...`
-- `datasets/pile-val-backup/...`
-
-Notes:
-
-- this README does not ship an auto-download script for `c4`, `ptb_text_only`, `pile-val-backup`
-- if you do not call those loaders, you do not need to download them
-- `src/calibration.py` and `src/evaluation/sliding_window.py` can already fetch data from Hugging Face
-
-## Quick runs with `.sh` files
-
-The repo ships wrapper scripts grouped by:
+The wrappers are grouped by correction stage and base quantizer:
 
 - `scripts/bash/clc/awq/`
 - `scripts/bash/clc/flatquant/`
 - `scripts/bash/bias_correction/awq/`
 - `scripts/bash/bias_correction/flatquant/`
 
-Each group has scripts for:
+Each group has one script per model family: `run_mistral.sh`, `run_llama3.sh`, `run_llama31.sh`, `run_qwen25.sh`.
 
-- `run_mistral.sh`
-- `run_llama3.sh`
-- `run_llama31.sh`
-- `run_qwen25.sh`
-
-### Basic usage
-
-For example, with Mistral:
+Basic use:
 
 ```bash
 bash scripts/bash/clc/awq/run_mistral.sh
 ```
 
-Or override the model:
+Override the model:
 
 ```bash
 MODEL_PATH=meta-llama/Meta-Llama-3-8B \
@@ -321,54 +213,7 @@ MODELS_ROOT=/models \
 bash scripts/bash/clc/awq/run_llama3.sh
 ```
 
-### `clc/awq` scripts
-
-The script will:
-
-1. run `float_model`
-2. run `awq raw`
-3. sweep the `knee_tolerance` x `max_flip_percent` grid for `clc`
-
-Example:
-
-```bash
-MODEL_PATH=mistralai/Mistral-7B-v0.3 \
-bash scripts/bash/clc/awq/run_mistral.sh
-```
-
-### `bias_correction/awq` scripts
-
-The script will:
-
-1. optionally run `float_model`
-2. run `awq raw`
-3. run `awq + bias_correction`
-
-Example:
-
-```bash
-MODEL_PATH=mistralai/Mistral-7B-v0.3 \
-BIAS_CORRECTION_SAMPLES=4096 \
-bash scripts/bash/bias_correction/awq/run_mistral.sh
-```
-
-### `clc/flatquant` scripts
-
-The script will:
-
-1. optionally run `float_model`
-2. optionally run `flatquant raw`
-3. if raw is skipped, reuse `RAW_MODEL_DIR`
-4. run `flatquant + clc` with `--flatquant-raw-path "$RAW_MODEL_DIR"`
-
-Example:
-
-```bash
-MODEL_PATH=mistralai/Mistral-7B-v0.3 \
-bash scripts/bash/clc/flatquant/run_mistral.sh
-```
-
-If you already have a raw artifact:
+The `clc/awq` scripts run the float model, run AWQ raw, then sweep the `knee_tolerance` × `max_flip_percent` grid for CLC. The `clc/flatquant` scripts produce a FlatQuant raw artifact first, then run CLC on top; set `RUN_RAW_QUANTIZE=0` with `RAW_MODEL_DIR=...` to reuse an existing raw artifact:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
@@ -377,70 +222,73 @@ RAW_MODEL_DIR=./results/models/flatquant_raw/flatquant_raw_Mistral-7B-v0.3 \
 bash scripts/bash/clc/flatquant/run_mistral.sh
 ```
 
-### `bias_correction/flatquant` scripts
+The `bias_correction/*` scripts follow the same pattern with a single bias-correction run instead of a grid sweep.
 
-Similarly, this script produces a raw FlatQuant artifact first, then runs correction:
+### Common environment variables
+
+All wrappers honor:
+
+`MODEL_PATH`, `MODELS_ROOT`, `PYTHON_BIN`, `RESULTS_MODELS_DIR`, `RESULTS_EVAL_DIR`, `CALIBRATION_CACHE_DIR`, `EVAL_CACHE_DIR`, `CALIB_DATASET`, `N_CALIB`, `CALIB_SEQLEN`, `SEED`, `STRIDE`, `MAX_LENGTH`, `C4_SAMPLES`, `LM_EVAL_TASK_PRESET`, `INCLUDE_LM_EVAL`, `INCLUDE_C4`, `USE_WANDB`, `WANDB_PROJECT`, `WANDB_ENTITY`.
+
+FlatQuant wrappers additionally honor: `RUN_FLOAT_MODEL`, `RUN_RAW_QUANTIZE`, `RAW_MODEL_DIR`, `FLATQUANT_EPOCHS`, `FLATQUANT_CALI_BSZ`, `FLATQUANT_LR`, `FLATQUANT_DIAG_INIT`, `FLATQUANT_DIAG_ALPHA`, `FLATQUANT_CALI_TRANS`, `FLATQUANT_ADD_DIAG`, `FLATQUANT_LWC`, `FLATQUANT_LAC`.
+
+## Evaluation
+
+Each run writes a JSON report into `results/eval/`. Two evaluation paths are available:
+
+- the default sliding-window path (`src/evaluation/sliding_window.py`) downloads WikiText-2 and C4 from Hugging Face and caches them under `data/cache/eval`
+- the FlatQuant path (`src/evaluation/flatquant_runner.py`) uses local dataset scripts under `datasets/`
+
+By default WikiText-2, C4, and `lm_eval` are all enabled, with the `extended` `lm_eval` preset. Useful options:
+
+- `--no-c4`
+- `--no-lm-eval`
+- `--lm-eval-task-preset core|extended`
+- `--lm-eval-tasks arc_easy hellaswag ...`
+- `--use-wandb`
+
+## Datasets
+
+Two distinct things:
+
+1. `data/cache/...` — runtime cache the repo creates while running calibration/evaluation.
+2. `datasets/...` — local datasets that some FlatQuant loaders read directly.
+
+For the AWQ flows and sliding-window evaluation, calibration (`c4`) and evaluation data (WikiText-2, C4) are downloaded automatically from Hugging Face — no manual setup is needed.
+
+The FlatQuant loaders (`flatquant/data_utils.py`, `src/evaluation/flatquant_data_utils.py`) instead read from local paths:
+
+- `datasets/wikitext`
+- `datasets/allenai/c4`
+- `datasets/ptb_text_only`
+- `datasets/pile-val-backup`
+
+At minimum prepare `datasets/wikitext`, which is the most common FlatQuant setup pitfall. The repo ships `datasets/wikitext/wikitext.py`, which reads a local zip:
 
 ```bash
-MODEL_PATH=mistralai/Mistral-7B-v0.3 \
-bash scripts/bash/bias_correction/flatquant/run_mistral.sh
+mkdir -p datasets/wikitext
+cd datasets/wikitext
+wget -O wikitext-2-raw-v1.zip \
+  "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip?download=true"
 ```
 
-Or reuse a raw artifact:
+Resulting layout:
 
-```bash
-MODEL_PATH=mistralai/Mistral-7B-v0.3 \
-RUN_RAW_QUANTIZE=0 \
-RAW_MODEL_DIR=./results/models/flatquant_raw/flatquant_raw_Mistral-7B-v0.3 \
-bash scripts/bash/bias_correction/flatquant/run_mistral.sh
+```text
+datasets/
+  wikitext/
+    wikitext.py
+    wikitext-2-raw-v1.zip
 ```
 
-### Common environment variables for `.sh`
-
-All wrapper scripts support these environment variables:
-
-- `MODEL_PATH`
-- `MODELS_ROOT`
-- `PYTHON_BIN`
-- `RESULTS_MODELS_DIR`
-- `RESULTS_EVAL_DIR`
-- `CALIBRATION_CACHE_DIR`
-- `EVAL_CACHE_DIR`
-- `CALIB_DATASET`
-- `N_CALIB`
-- `CALIB_SEQLEN`
-- `SEED`
-- `STRIDE`
-- `MAX_LENGTH`
-- `C4_SAMPLES`
-- `LM_EVAL_TASK_PRESET`
-- `INCLUDE_LM_EVAL`
-- `INCLUDE_C4`
-- `USE_WANDB`
-- `WANDB_PROJECT`
-- `WANDB_ENTITY`
-
-FlatQuant wrappers additionally support:
-
-- `RUN_FLOAT_MODEL`
-- `RUN_RAW_QUANTIZE`
-- `RAW_MODEL_DIR`
-- `FLATQUANT_EPOCHS`
-- `FLATQUANT_CALI_BSZ`
-- `FLATQUANT_LR`
-- `FLATQUANT_DIAG_INIT`
-- `FLATQUANT_DIAG_ALPHA`
-- `FLATQUANT_CALI_TRANS`
-- `FLATQUANT_ADD_DIAG`
-- `FLATQUANT_LWC`
-- `FLATQUANT_LAC`
+The other local datasets are only needed if you call their corresponding FlatQuant loaders.
 
 ## Testing
 
-The repo uses `unittest`, run via `pytest`:
+The test suite uses `unittest`, run via `pytest`:
 
 ```bash
-# Full suite
+# Everything
 python -m pytest tests/ -v
 
 # A single file
@@ -450,26 +298,12 @@ python -m pytest tests/test_quantization_pipeline.py -v
 python -m pytest tests/test_main.py::ParserModeTests::test_parser_accepts_single_model_modes -v
 ```
 
-Key test files:
-
-- `tests/test_main.py`: CLI parser and the `run_quantize` flow
-- `tests/test_quantization_pipeline.py`: pipeline factory and config (AWQ, FlatQuant, post-correction)
-- `tests/test_bash_scripts.py`: layout and content checks for the `.sh` wrappers
-- `tests/test_flatquant_*.py`, `tests/test_lm_eval_runner.py`: FlatQuant and lm-eval integration
+Key files: `tests/test_main.py` (CLI and the quantize flow), `tests/test_quantization_pipeline.py` (pipeline factory and configs), `tests/test_bash_scripts.py` (wrapper layout and contents), and `tests/test_flatquant_*.py` / `tests/test_lm_eval_runner.py` (FlatQuant and lm-eval integration).
 
 ## Output locations
 
 - model artifacts: `results/models/<variant>/<run_name>/`
-- evaluation JSON: `results/eval/<run_name>.json`
-- model metadata: `results/models/<variant>/<run_name>/metadata.json`
+- evaluation report: `results/eval/<run_name>.json`
+- run metadata: `results/models/<variant>/<run_name>/metadata.json`
 
-Notes:
-
-- for `flatquant` + `post_correction=none`, the raw output is retained so correction stages can reuse it
-- some temporary quantized outputs may be deleted after evaluation if the pipeline does not need to keep them
-
-## Notes
-
-- `clc` and `bias_correction` are both post-correction stages.
-- `flatquant` needs more complete local datasets than `awq`, especially when running through the FlatQuant evaluation/loader flow.
-- If you hit dataset errors while running FlatQuant, check `CLC/datasets` first.
+For `flatquant` with `--post-correction none`, the raw output is kept so a later correction stage can reuse it. Other temporary quantized outputs may be removed after evaluation when the pipeline no longer needs them.
