@@ -14,7 +14,6 @@ from src.post_correction.bias_correction import BiasCorrectionConfig, BiasCorrec
 from src.post_correction.smart_flip import SmartFlipConfig, SmartFlipCorrection
 from src.quantization.awq import AWQConfig, AWQQuantizerXL
 from src.quantization.flatquant import FlatQuantConfig, FlatQuantRTNQuantizer, _ActivationCollector
-from src.quantization.gptq import GPTQ
 from src.quantization.pipeline import QuantizationRecipe, create_quantizer
 
 
@@ -110,28 +109,6 @@ class QuantizationAssemblyTests(unittest.TestCase):
         self.assertIsInstance(correction.config, BiasCorrectionConfig)
         self.assertIs(quantizer.post_correction, correction)
 
-    def test_create_quantizer_builds_gptq_with_smart_flip(self):
-        recipe = QuantizationRecipe(origin_method="gptq", post_correction="smart_flip")
-        args = self.make_args()
-        args.gptq_percdamp = 0.01
-        args.gptq_sym = False
-        args.gptq_act_order = False
-        args.gptq_true_sequential = True
-        args.gptq_static_groups = False
-        args.gptq_mse = False
-        quantizer, base_config, correction = create_quantizer(
-            model=SimpleNamespace(config=SimpleNamespace(model_type="llama", _name_or_path="meta-llama/Llama-3-8B")),
-            tokenizer=object(),
-            device="cpu",
-            args=args,
-            recipe=recipe,
-        )
-
-        self.assertEqual(type(quantizer).__name__, "GPTQQuantizer")
-        self.assertEqual(base_config.bits, 4)
-        self.assertIsInstance(correction, SmartFlipCorrection)
-
-
     def test_create_quantizer_builds_flatquant_with_smart_flip_post_correction(self):
         recipe = QuantizationRecipe(origin_method="flatquant", post_correction="smart_flip")
         quantizer, base_config, correction = create_quantizer(
@@ -207,75 +184,6 @@ class BiasCorrectionTests(unittest.TestCase):
         bias_delta = correction.compute_bias_delta(module, quant_weight, collector, device="cpu")
 
         self.assertTrue(torch.allclose(bias_delta, torch.tensor([2.0, 3.0], dtype=torch.float32)))
-
-
-class GPTQPostCorrectionTests(unittest.TestCase):
-    def test_dead_columns_are_not_reintroduced_by_smart_flip(self):
-        layer = torch.nn.Linear(2, 2, bias=False)
-        layer.weight.data = torch.tensor([[1.25, -0.75], [0.5, 0.125]], dtype=torch.float32)
-        gptq = GPTQ(layer, smart_flip=SmartFlipCorrection())
-        gptq.quantizer = SimpleNamespace(maxq=torch.tensor(15))
-        gptq.activation_sums = torch.tensor([10.0, 0.0], dtype=torch.float64)
-        gptq.activation_count = 1
-
-        original = torch.tensor([[1.25, -0.75], [0.5, 0.125]], dtype=torch.float32)
-        quant = torch.tensor([[1.0, 0.0], [0.5, 0.0]], dtype=torch.float32)
-        pre_round = torch.tensor([[8.9, 3.8], [7.9, 4.2]], dtype=torch.float32)
-        integer = torch.tensor([[8.0, 4.0], [8.0, 4.0]], dtype=torch.float32)
-        scale = torch.ones_like(original) * 0.25
-        zero = torch.ones_like(original) * 4.0
-
-        corrected = gptq._run_post_correction(
-            original,
-            quant,
-            pre_round,
-            integer,
-            scale,
-            zero,
-            dead_mask=torch.tensor([False, True]),
-        )
-
-        self.assertTrue(torch.allclose(corrected[:, 1], torch.zeros(2, dtype=torch.float32)))
-
-    def test_gptq_grouping_falls_back_to_full_subset_for_wrapped_qwen_style_names(self):
-        from src.quantization.gptq import GPTQConfig, GPTQQuantizer
-
-        quantizer = GPTQQuantizer(
-            model=SimpleNamespace(config=SimpleNamespace(model_type="qwen2", _name_or_path="Qwen/Qwen2.5-7B")),
-            tokenizer=object(),
-            device="cpu",
-            config=GPTQConfig(),
-        )
-        full = {
-            "self_attn.q_proj.linear": object(),
-            "self_attn.k_proj.linear": object(),
-            "self_attn.v_proj.linear": object(),
-            "self_attn.o_proj.linear": object(),
-            "mlp.gate_proj.linear": object(),
-            "mlp.up_proj.linear": object(),
-            "mlp.down_proj.linear": object(),
-        }
-
-        groups = quantizer._get_sequential_groups(full)
-
-        self.assertEqual(groups, [list(full.keys())])
-
-    def test_gptq_rejects_calibration_tokens_outside_model_vocab(self):
-        from src.quantization.gptq import GPTQConfig, GPTQQuantizer
-
-        model = SimpleNamespace(
-            config=SimpleNamespace(use_cache=False, vocab_size=32768),
-            model=SimpleNamespace(layers=[torch.nn.Identity()]),
-        )
-        quantizer = GPTQQuantizer(
-            model=model,
-            tokenizer=object(),
-            device="cpu",
-            config=GPTQConfig(),
-        )
-
-        with self.assertRaisesRegex(ValueError, "outside the model vocabulary range"):
-            quantizer.quantize_model_sequential([torch.tensor([[0, 32768]])])
 
 
 class CalibrationCacheTests(unittest.TestCase):
@@ -367,109 +275,6 @@ class CalibrationCacheTests(unittest.TestCase):
             self.assertFalse(legacy_path.exists())
             migrated = list(Path(tmpdir).glob("c4_calib_n1_len2_seed42_tensorsTrue_tok*.pkl"))
             self.assertEqual(len(migrated), 1)
-
-    def test_gptq_quantizer_save_and_load_raw_artifacts_round_trip(self):
-        from src.quantization.gptq import GPTQConfig, GPTQQuantizer
-
-        quantizer = GPTQQuantizer(
-            model=SimpleNamespace(config=SimpleNamespace(model_type="llama", _name_or_path="meta-llama/Llama-3-8B")),
-            tokenizer=object(),
-            device="cpu",
-            config=GPTQConfig(),
-        )
-        quantizer.raw_artifacts = {
-            "model.layers.0.self_attn.q_proj": {
-                "activation_count": 1,
-                "activation_sums": torch.tensor([1.0, 2.0], dtype=torch.float64),
-            }
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            quantizer.save_raw_artifacts(tmpdir)
-            loaded = quantizer.load_raw_artifacts(tmpdir)
-
-        self.assertEqual(loaded["model.layers.0.self_attn.q_proj"]["activation_count"], 1)
-        self.assertTrue(
-            torch.allclose(
-                loaded["model.layers.0.self_attn.q_proj"]["activation_sums"],
-                torch.tensor([1.0, 2.0], dtype=torch.float64),
-            )
-        )
-
-    def test_apply_saved_raw_artifact_matches_direct_smart_flip_post_correction(self):
-        layer = torch.nn.Linear(2, 2, bias=False)
-        layer.weight.data = torch.tensor([[1.25, -0.75], [0.5, 0.125]], dtype=torch.float32)
-
-        base_gptq = GPTQ(layer)
-        base_gptq.quantizer = SimpleNamespace(maxq=torch.tensor(15))
-        original = torch.tensor([[1.25, -0.75], [0.5, 0.125]], dtype=torch.float32)
-        quant = torch.tensor([[1.0, 0.0], [0.5, 0.0]], dtype=torch.float32)
-        pre_round = torch.tensor([[8.9, 3.8], [7.9, 4.2]], dtype=torch.float32)
-        integer = torch.tensor([[8.0, 4.0], [8.0, 4.0]], dtype=torch.float32)
-        scale = torch.ones_like(original) * 0.25
-        zero = torch.ones_like(original) * 4.0
-        dead_mask = torch.tensor([False, True])
-
-        quant_state = base_gptq._build_quant_state(original, pre_round, integer, scale, zero)
-        artifact = {
-            "quant_state": base_gptq._serialize_quant_state(quant_state),
-            "activation_sums": torch.tensor([10.0, 0.0], dtype=torch.float64),
-            "activation_count": 1,
-            "activation_samples": None,
-            "dead": dead_mask,
-        }
-
-        expected_layer = torch.nn.Linear(2, 2, bias=False)
-        expected_layer.weight.data = quant.clone()
-        expected_gptq = GPTQ(expected_layer, smart_flip=SmartFlipCorrection())
-        expected_gptq.quantizer = SimpleNamespace(maxq=torch.tensor(15))
-        expected_gptq.activation_sums = artifact["activation_sums"]
-        expected_gptq.activation_count = artifact["activation_count"]
-        expected = expected_gptq._run_post_correction(
-            original,
-            quant,
-            pre_round,
-            integer,
-            scale,
-            zero,
-            dead_mask=dead_mask,
-        )
-
-        actual_layer = torch.nn.Linear(2, 2, bias=False)
-        actual_layer.weight.data = quant.clone()
-        actual_gptq = GPTQ(actual_layer, smart_flip=SmartFlipCorrection())
-        actual_gptq.apply_saved_raw_artifact(artifact)
-
-        self.assertTrue(torch.allclose(actual_layer.weight.data, expected))
-
-    def test_apply_saved_raw_artifact_applies_bias_correction_without_requantizing(self):
-        layer = torch.nn.Linear(2, 2, bias=False)
-        original = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
-        quant = torch.zeros_like(original)
-        pre_round = torch.zeros_like(original)
-        integer = torch.zeros_like(original)
-        scale = torch.ones_like(original)
-        zero = torch.zeros_like(original)
-
-        base_gptq = GPTQ(layer)
-        base_gptq.quantizer = SimpleNamespace(maxq=torch.tensor(15))
-        quant_state = base_gptq._build_quant_state(original, pre_round, integer, scale, zero)
-        activation_samples = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
-        artifact = {
-            "quant_state": base_gptq._serialize_quant_state(quant_state),
-            "activation_sums": activation_samples.sum(dim=0, dtype=torch.float64),
-            "activation_count": activation_samples.shape[0],
-            "activation_samples": activation_samples,
-            "dead": torch.tensor([False, False]),
-        }
-
-        gptq = GPTQ(layer, bias_correction=BiasCorrectionCorrection(BiasCorrectionConfig(max_samples=32)))
-        gptq.apply_saved_raw_artifact(artifact)
-
-        self.assertTrue(torch.allclose(layer.weight.data, quant))
-        self.assertIsNotNone(layer.bias)
-        self.assertTrue(torch.allclose(layer.bias.detach(), torch.tensor([2.0, 3.0], dtype=torch.float32)))
-
 
     def test_flatquant_model_utils_supports_mistral_repo_names(self):
         mistral_apply = object()
@@ -650,7 +455,7 @@ class CalibrationCacheTests(unittest.TestCase):
         flat_utils = types.ModuleType("flatquant.flat_utils")
         train_utils = types.ModuleType("flatquant.train_utils")
         utils = types.ModuleType("flatquant.utils")
-        gptq_utils = types.ModuleType("gptq_utils")
+        rtn_utils = types.ModuleType("rtn_utils")
 
         data_utils.get_loaders = lambda *args, **kwargs: []
         flat_utils.load_flat_parameters = lambda *args, **kwargs: None
@@ -658,8 +463,7 @@ class CalibrationCacheTests(unittest.TestCase):
         flat_utils.save_flat_matrices = lambda *args, **kwargs: None
         flat_utils.reparameterize_model = lambda _model: None
         flat_utils.save_quantized_weights_with_safetensors = lambda *args, **kwargs: None
-        gptq_utils.gptq_fwrd = lambda *args, **kwargs: {}
-        gptq_utils.rtn_fwrd = lambda *args, **kwargs: {}
+        rtn_utils.rtn_fwrd = lambda *args, **kwargs: {}
         utils.DEV = "cpu"
         utils.distribute_model = lambda _model: None
 
@@ -686,7 +490,7 @@ class CalibrationCacheTests(unittest.TestCase):
                     "flatquant.flat_utils",
                     "flatquant.train_utils",
                     "flatquant.utils",
-                    "gptq_utils",
+                    "rtn_utils",
                 ]
             }
             try:
@@ -695,7 +499,7 @@ class CalibrationCacheTests(unittest.TestCase):
                 sys.modules["flatquant.flat_utils"] = flat_utils
                 sys.modules["flatquant.train_utils"] = train_utils
                 sys.modules["flatquant.utils"] = utils
-                sys.modules["gptq_utils"] = gptq_utils
+                sys.modules["rtn_utils"] = rtn_utils
 
                 quantizer._run_flatquant_raw(n_samples=0)
 
@@ -750,7 +554,7 @@ class CalibrationCacheTests(unittest.TestCase):
         flat_utils = types.ModuleType("flatquant.flat_utils")
         train_utils = types.ModuleType("flatquant.train_utils")
         utils = types.ModuleType("flatquant.utils")
-        gptq_utils = types.ModuleType("gptq_utils")
+        rtn_utils = types.ModuleType("rtn_utils")
 
         expected_loader = [("tokens", "targets")]
         data_utils.get_loaders = lambda *args, **kwargs: expected_loader
@@ -762,8 +566,7 @@ class CalibrationCacheTests(unittest.TestCase):
         train_utils.cali_flat_quant = lambda *args, **kwargs: None
         utils.DEV = "cpu"
         utils.distribute_model = lambda _model: None
-        gptq_utils.gptq_fwrd = lambda *args, **kwargs: {}
-        gptq_utils.rtn_fwrd = lambda *args, **kwargs: {}
+        rtn_utils.rtn_fwrd = lambda *args, **kwargs: {}
 
         quantizer._select_apply_fn = lambda: (lambda _args, model_obj: model_obj)
 
@@ -775,7 +578,7 @@ class CalibrationCacheTests(unittest.TestCase):
                 "flatquant.flat_utils",
                 "flatquant.train_utils",
                 "flatquant.utils",
-                "gptq_utils",
+                "rtn_utils",
             ]
         }
         try:
@@ -784,7 +587,7 @@ class CalibrationCacheTests(unittest.TestCase):
             sys.modules["flatquant.flat_utils"] = flat_utils
             sys.modules["flatquant.train_utils"] = train_utils
             sys.modules["flatquant.utils"] = utils
-            sys.modules["gptq_utils"] = gptq_utils
+            sys.modules["rtn_utils"] = rtn_utils
 
             trainloader, flatquant_args = quantizer._run_flatquant_raw(n_samples=1)
 
@@ -815,7 +618,7 @@ class CalibrationCacheTests(unittest.TestCase):
         flat_utils = types.ModuleType("flatquant.flat_utils")
         train_utils = types.ModuleType("flatquant.train_utils")
         utils = types.ModuleType("flatquant.utils")
-        gptq_utils = types.ModuleType("gptq_utils")
+        rtn_utils = types.ModuleType("rtn_utils")
 
         expected_loader = [("tokens", "targets")]
         data_utils.get_loaders = lambda *args, **kwargs: expected_loader
@@ -828,8 +631,7 @@ class CalibrationCacheTests(unittest.TestCase):
         train_utils.cali_flat_quant = lambda *args, **kwargs: observed.__setitem__("cali_called", True)
         utils.DEV = "cpu"
         utils.distribute_model = lambda _model: None
-        gptq_utils.gptq_fwrd = lambda *args, **kwargs: {}
-        gptq_utils.rtn_fwrd = lambda *args, **kwargs: {}
+        rtn_utils.rtn_fwrd = lambda *args, **kwargs: {}
 
         quantizer._select_apply_fn = lambda: (lambda _args, model_obj: model_obj)
 
@@ -841,7 +643,7 @@ class CalibrationCacheTests(unittest.TestCase):
                 "flatquant.flat_utils",
                 "flatquant.train_utils",
                 "flatquant.utils",
-                "gptq_utils",
+                "rtn_utils",
             ]
         }
         try:
@@ -850,7 +652,7 @@ class CalibrationCacheTests(unittest.TestCase):
             sys.modules["flatquant.flat_utils"] = flat_utils
             sys.modules["flatquant.train_utils"] = train_utils
             sys.modules["flatquant.utils"] = utils
-            sys.modules["gptq_utils"] = gptq_utils
+            sys.modules["rtn_utils"] = rtn_utils
 
             trainloader, flatquant_args = quantizer._run_flatquant_raw(n_samples=1, reuse_flat_parameters_path="/tmp/raw-flatquant")
 

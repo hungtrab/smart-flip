@@ -41,7 +41,7 @@ class FlatQuantConfig:
     direct_inv: bool = False
     separate_vtrans: bool = False
     warmup: bool = False
-    gptq_mse: bool = False
+    rtn_mse: bool = False
     w_groupsize: int = -1
     debug_diagnostics: bool = False
     debug_sample_limit: int = 256
@@ -203,10 +203,7 @@ class FlatQuantRTNQuantizer:
             w_bits=self.config.w_bits,
             w_groupsize=self.config.w_groupsize,
             w_asym=self.config.w_asym,
-            gptq=False,
-            gptq_mse=self.config.gptq_mse,
-            percdamp=0.01,
-            act_order=False,
+            rtn_mse=self.config.rtn_mse,
             epochs=self.config.epochs,
             nsamples=nsamples,
             cali_bsz=self.config.cali_bsz,
@@ -464,7 +461,7 @@ class FlatQuantRTNQuantizer:
             from flatquant.quant_utils import WeightQuantizer
 
             quantizer = WeightQuantizer()
-            quantizer.configure(self.config.w_bits, perchannel=True, sym=not self.config.w_asym, mse=self.config.gptq_mse)
+            quantizer.configure(self.config.w_bits, perchannel=True, sym=not self.config.w_asym, mse=self.config.rtn_mse)
             quantizer.find_params(float_weight)
         scale = quantizer.scale.to(device=float_weight.device, dtype=float_weight.dtype)
         zero = quantizer.zero.to(device=float_weight.device, dtype=float_weight.dtype)
@@ -597,7 +594,7 @@ class FlatQuantRTNQuantizer:
         import flatquant.flat_utils as fq_flat_utils
         import flatquant.train_utils as fq_train_utils
         import flatquant.utils as fq_utils
-        import gptq_utils as fq_gptq_utils
+        import rtn_utils as fq_rtn_utils
 
         flatquant_args = self._build_flatquant_args(n_samples)
         full_args = getattr(self, "_full_args", None)
@@ -637,10 +634,7 @@ class FlatQuantRTNQuantizer:
 
         quantizers = None
         if flatquant_args.w_bits < 16:
-            if flatquant_args.gptq:
-                quantizers = fq_gptq_utils.gptq_fwrd(self.model, trainloader, fq_utils.DEV, flatquant_args)
-            else:
-                quantizers = fq_gptq_utils.rtn_fwrd(self.model, fq_utils.DEV, flatquant_args)
+            quantizers = fq_rtn_utils.rtn_fwrd(self.model, fq_utils.DEV, flatquant_args)
 
         self._rtn_quantizers = quantizers or {}
 

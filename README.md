@@ -9,10 +9,17 @@
 
 Entrypoint chinh cua repo la `main.py`. Cac script trong `scripts/bash/` chi la wrapper de chay nhanh cac recipe pho bien.
 
+> **Phuong phap quantization duoc ho tro:** chi con `awq` va `flatquant`.
+> Backend `gptq` da bi go bo hoan toan khoi repo (quantizer, CLI flag `--gptq-*`,
+> wrapper script va test lien quan). FlatQuant van dung round-to-nearest qua
+> helper `rtn_utils.py`. Cac chuoi `gptq` con sot lai chi nam trong thu vien
+> FlatQuant goc (`flatquant/`) va trong `legacy/`, deu khong con duoc luong chinh goi toi.
+
 ## Cau truc repo
 
 - `main.py`: CLI chinh cho quantization va evaluation
 - `src/quantization/`: pipeline quantization, AWQ, FlatQuant adapter, bias correction
+- `rtn_utils.py`: helper round-to-nearest (`rtn_fwrd`, `find_qlayers`) ma luong FlatQuant goi den
 - `src/post_correction/`: `smart_flip` va cac correction stage
 - `src/evaluation/`: evaluation thong thuong va evaluation cho FlatQuant
 - `flatquant/`: phan code FlatQuant goc duoc repo nay tai su dung
@@ -436,6 +443,28 @@ Luu y:
 
 - voi `flatquant` + `post_correction=none`, raw output duoc giu lai de cac correction stage co the tai su dung
 - mot so quantized output tam co the bi xoa sau evaluation neu pipeline khong can giu no lai
+
+## Kiem thu
+
+Repo dung `unittest`, chay qua `pytest`:
+
+```bash
+# Toan bo test
+python -m pytest tests/ -v
+
+# Mot file
+python -m pytest tests/test_quantization_pipeline.py -v
+
+# Mot test
+python -m pytest tests/test_main.py::ParserModeTests::test_parser_accepts_single_model_modes -v
+```
+
+Cac file test chinh:
+
+- `tests/test_main.py`: parser CLI va luong `run_quantize`
+- `tests/test_quantization_pipeline.py`: factory pipeline va config (AWQ, FlatQuant, post-correction)
+- `tests/test_bash_scripts.py`: kiem tra layout va noi dung cac wrapper `.sh`
+- `tests/test_flatquant_*.py`, `tests/test_lm_eval_runner.py`: tich hop FlatQuant va lm-eval
 
 ## Ghi chu
 
