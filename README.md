@@ -35,9 +35,26 @@ CLC works as a post-correction stage on either an AWQ or a FlatQuant base, and s
 
 ## Installation
 
+Install the Python dependencies first:
+
 ```bash
 pip install -r requirements.txt
 ```
+
+`torch` is intentionally left out of `requirements.txt` because the right build depends on your CUDA version. Install it separately afterwards, matching your setup — for example:
+
+```bash
+# CUDA 12.4
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+# CUDA 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# CPU only
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Pick the index URL for your CUDA version (see https://pytorch.org for the current matrix).
 
 To use a private Hugging Face model or log to Weights & Biases, create a `.env` file at the repo root:
 
