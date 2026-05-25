@@ -1,94 +1,95 @@
 # smart-flip
 
-`smart-flip` la repo nghien cuu va van hanh cho cac thu nghiem quantization xoay quanh:
+`smart-flip` is a research and experimentation repo for quantization, centered on:
 
 - `awq`
 - `flatquant`
-- cac hau xu ly `smart_flip` va `bias_correction`
-- danh gia perplexity va `lm-evaluation-harness`
+- the `smart_flip` and `bias_correction` post-correction stages
+- perplexity evaluation and the `lm-evaluation-harness`
 
-Entrypoint chinh cua repo la `main.py`. Cac script trong `scripts/bash/` chi la wrapper de chay nhanh cac recipe pho bien.
+The main entrypoint is `main.py`. The scripts under `scripts/bash/` are just wrappers for running common recipes quickly.
 
-> **Phuong phap quantization duoc ho tro:** chi con `awq` va `flatquant`.
-> Backend `gptq` da bi go bo hoan toan khoi repo (quantizer, CLI flag `--gptq-*`,
-> wrapper script va test lien quan). FlatQuant van dung round-to-nearest qua
-> helper `rtn_utils.py`. Cac chuoi `gptq` con sot lai chi nam trong thu vien
-> FlatQuant goc (`flatquant/`) va trong `legacy/`, deu khong con duoc luong chinh goi toi.
+> **Supported quantization methods:** only `awq` and `flatquant`.
+> The `gptq` backend has been fully removed from the repo (quantizer, `--gptq-*`
+> CLI flags, wrapper scripts and related tests). FlatQuant still performs
+> round-to-nearest weight quantization through the `rtn_utils.py` helper. Any
+> leftover `gptq` strings live only inside the vendored FlatQuant library
+> (`flatquant/`) and in `legacy/`, neither of which is reached by the main flow.
 
-## Cau truc repo
+## Repository layout
 
-- `main.py`: CLI chinh cho quantization va evaluation
-- `src/quantization/`: pipeline quantization, AWQ, FlatQuant adapter, bias correction
-- `rtn_utils.py`: helper round-to-nearest (`rtn_fwrd`, `find_qlayers`) ma luong FlatQuant goi den
-- `src/post_correction/`: `smart_flip` va cac correction stage
-- `src/evaluation/`: evaluation thong thuong va evaluation cho FlatQuant
-- `flatquant/`: phan code FlatQuant goc duoc repo nay tai su dung
-- `scripts/bash/`: cac wrapper `.sh` de chay nhanh theo model family va recipe
-- `datasets/`: dataset local ma FlatQuant loader can su dung
-- `data/cache/`: cache calibration/evaluation runtime
-- `results/models/`: artifact model sau quantization
-- `results/eval/`: ket qua evaluation JSON
-- `legacy/`: script va tai lieu cu de doi chieu
+- `main.py`: main CLI for quantization and evaluation
+- `src/quantization/`: quantization pipeline, AWQ, FlatQuant adapter, bias correction
+- `rtn_utils.py`: round-to-nearest helper (`rtn_fwrd`, `find_qlayers`) used by the FlatQuant flow
+- `src/post_correction/`: `smart_flip` and the other correction stages
+- `src/evaluation/`: standard evaluation and FlatQuant-specific evaluation
+- `flatquant/`: the original FlatQuant code, vendored and reused by this repo
+- `scripts/bash/`: `.sh` wrappers to run quickly per model family and recipe
+- `datasets/`: local datasets some FlatQuant loaders need
+- `data/cache/`: runtime calibration/evaluation cache
+- `results/models/`: model artifacts after quantization
+- `results/eval/`: evaluation result JSON
+- `legacy/`: old scripts and docs kept for reference
 
-## Cai dat
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Neu dung model private tren Hugging Face hoac can log W&B, tao file `.env` o root repo:
+If you use a private Hugging Face model or want to log to W&B, create a `.env` file at the repo root:
 
 ```bash
 HF_TOKEN=...
 WANDB_API_KEY=...
 ```
 
-`main.py` tu dong nap `.env` neu file ton tai.
+`main.py` loads `.env` automatically if the file exists.
 
-## Cach repo hoat dong
+## How the repo works
 
-Repo co 2 nhom luong chinh:
+There are two main flows:
 
 1. `float_model`
-   Danh gia model float goc.
+   Evaluate the original float model.
 2. `quantize`
-   Quantize roi danh gia ngay sau do.
+   Quantize and then evaluate right after.
 
-`quantize` duoc cau hinh boi:
+`quantize` is configured by:
 
 - `--origin-method awq|flatquant`
 - `--post-correction none|smart_flip|bias_correction`
 
-Nhung mode con lai thuc chat la shortcut:
+The remaining modes are essentially shortcuts:
 
 - `raw_quantize` = `post_correction=none`
 - `flip_quantize` = `post_correction=smart_flip`
-- `compare_all` = danh gia dong thoi `float`, `raw`, `flip`
+- `compare_all` = evaluate `float`, `raw`, and `flip` together
 
 ## Model path resolution
 
-`--model-path` duoc resolve theo thu tu:
+`--model-path` is resolved in this order:
 
-1. dung truc tiep neu la local path ton tai
-2. thu `<models_root>/<model_path>` voi `--models-root` mac dinh la `/models`
-3. neu khong tim thay thi xem nhu Hugging Face model id
+1. use it directly if it is an existing local path
+2. try `<models_root>/<model_path>`, where `--models-root` defaults to `/models`
+3. otherwise treat it as a Hugging Face model id
 
-Vi du:
+Examples:
 
 - `--model-path /models/Mistral-7B-v0.3`
 - `--model-path Mistral-7B-v0.3 --models-root /models`
 - `--model-path mistralai/Mistral-7B-v0.3`
 
-## CLI co san
+## Available CLI
 
-Xem help:
+See the help:
 
 ```bash
 python main.py -h
 python main.py quantize -h
 ```
 
-### 1. Danh gia float model
+### 1. Evaluate a float model
 
 ```bash
 python main.py float_model \
@@ -147,7 +148,7 @@ python main.py quantize \
 
 ### 6. FlatQuant + smart_flip
 
-Voi `flatquant`, cac recipe co correction can tro den artifact raw truoc do bang `--flatquant-raw-path`.
+With `flatquant`, correction recipes reference the previously produced raw artifact via `--flatquant-raw-path`.
 
 ```bash
 python main.py quantize \
@@ -185,25 +186,25 @@ python main.py compare_all \
 
 ## Evaluation
 
-Moi lan chay evaluation se ghi JSON vao `results/eval/`.
+Every evaluation run writes JSON into `results/eval/`.
 
-Repo co 2 luong evaluation:
+The repo has two evaluation flows:
 
-- luong mac dinh trong `src/evaluation/sliding_window.py`
-  - tai WikiText-2 va C4 qua Hugging Face
-  - cache vao `data/cache/eval`
-- luong FlatQuant trong `src/evaluation/flatquant_runner.py`
-  - dung local dataset script trong `datasets/`
-  - can co du lieu local o `smart-flip/datasets`
+- the default flow in `src/evaluation/sliding_window.py`
+  - downloads WikiText-2 and C4 via Hugging Face
+  - caches into `data/cache/eval`
+- the FlatQuant flow in `src/evaluation/flatquant_runner.py`
+  - uses the local dataset scripts under `datasets/`
+  - requires local data under `smart-flip/datasets`
 
-Mac dinh:
+Defaults:
 
-- co WikiText-2
-- co C4
-- co `lm_eval`
-- preset `lm_eval` mac dinh la `extended`
+- WikiText-2 enabled
+- C4 enabled
+- `lm_eval` enabled
+- default `lm_eval` preset is `extended`
 
-Mot so tuy chon huu ich:
+Some useful options:
 
 - `--no-c4`
 - `--no-lm-eval`
@@ -211,48 +212,48 @@ Mot so tuy chon huu ich:
 - `--lm-eval-tasks ...`
 - `--use-wandb`
 
-## Dataset va cache
+## Datasets and cache
 
-Can phan biet 2 khai niem:
+Two distinct concepts:
 
 1. `data/cache/...`
-   Day la cache runtime do repo tu tao khi chay calibration/evaluation.
+   Runtime cache the repo creates while running calibration/evaluation.
 2. `datasets/...`
-   Day la dataset local ma mot so FlatQuant loader can doc truc tiep.
+   Local datasets that some FlatQuant loaders read directly.
 
-### Dataset mac dinh cua `main.py`
+### Default datasets for `main.py`
 
-Khi chay cac luong AWQ thong thuong va sliding-window evaluation, repo se tu tai du lieu qua Hugging Face:
+For the usual AWQ flows and sliding-window evaluation, the repo downloads data via Hugging Face:
 
-- calibration `c4` trong `src/calibration.py`
-- WikiText-2 test trong `src/evaluation/sliding_window.py`
-- C4 validation trong `src/evaluation/sliding_window.py`
+- `c4` calibration in `src/calibration.py`
+- WikiText-2 test in `src/evaluation/sliding_window.py`
+- C4 validation in `src/evaluation/sliding_window.py`
 
-Ban khong can tai tay vao `smart-flip/datasets` chi de dung cac luong nay.
+You do not need to manually download anything into `smart-flip/datasets` just to use these flows.
 
-### Dataset local can cho FlatQuant
+### Local datasets required by FlatQuant
 
-FlatQuant loader trong cac file sau doc dataset local:
+The FlatQuant loaders in the following files read local datasets:
 
 - `flatquant/data_utils.py`
 - `src/evaluation/flatquant_data_utils.py`
 
-No tim du lieu trong:
+They look for data in:
 
 - `datasets/wikitext`
 - `datasets/allenai/c4`
 - `datasets/ptb_text_only`
 - `datasets/pile-val-backup`
 
-Trong thuc te, toi thieu ban nen chuan bi `datasets/wikitext`, vi repo dang kem san dataset script va day la phan de gap nhat khi chay evaluation theo luong FlatQuant.
+In practice, at minimum prepare `datasets/wikitext`, since the repo ships a dataset script and this is the most common pitfall when running the FlatQuant evaluation flow.
 
-### Cach tai WikiText-2 vao `smart-flip/datasets`
+### Downloading WikiText-2 into `smart-flip/datasets`
 
-Repo da kem san script `datasets/wikitext/wikitext.py`, script nay se doc file zip local:
+The repo ships the script `datasets/wikitext/wikitext.py`, which reads a local zip file:
 
 - `datasets/wikitext/wikitext-2-raw-v1.zip`
 
-Cach tai:
+How to download:
 
 ```bash
 mkdir -p datasets/wikitext
@@ -262,7 +263,7 @@ wget -O wikitext-2-raw-v1.zip \
 cd /workspace/smart-flip
 ```
 
-Sau khi tai xong, duong dan can co dang:
+After downloading, the layout should look like:
 
 ```text
 smart-flip/
@@ -272,46 +273,46 @@ smart-flip/
       wikitext-2-raw-v1.zip
 ```
 
-### Dataset local khac cho FlatQuant
+### Other local datasets for FlatQuant
 
-Neu ban su dung dung cac loader tuong ung trong FlatQuant, hay dat du lieu nhu sau:
+If you use the corresponding FlatQuant loaders, place the data as follows:
 
 - `datasets/allenai/c4/en/c4-train.00000-of-01024.json.gz`
 - `datasets/allenai/c4/en/c4-validation.00000-of-00008.json.gz`
 - `datasets/ptb_text_only/...`
 - `datasets/pile-val-backup/...`
 
-Luu y:
+Notes:
 
-- README nay khong kem script tai tu dong cho `c4`, `ptb_text_only`, `pile-val-backup`
-- neu ban khong goi cac loader do thi khong can tai truoc
-- luong `src/calibration.py` va `src/evaluation/sliding_window.py` da co the tu tai du lieu tu Hugging Face
+- this README does not ship an auto-download script for `c4`, `ptb_text_only`, `pile-val-backup`
+- if you do not call those loaders, you do not need to download them
+- `src/calibration.py` and `src/evaluation/sliding_window.py` can already fetch data from Hugging Face
 
-## Chay nhanh bang file `.sh`
+## Quick runs with `.sh` files
 
-Repo co 16 wrapper script, chia theo:
+The repo ships wrapper scripts grouped by:
 
 - `scripts/bash/smart_flip/awq/`
 - `scripts/bash/smart_flip/flatquant/`
 - `scripts/bash/bias_correction/awq/`
 - `scripts/bash/bias_correction/flatquant/`
 
-Moi nhom co 4 script cho:
+Each group has scripts for:
 
 - `run_mistral.sh`
 - `run_llama3.sh`
 - `run_llama31.sh`
 - `run_qwen25.sh`
 
-### Cach dung co ban
+### Basic usage
 
-Vi du voi Mistral:
+For example, with Mistral:
 
 ```bash
 bash scripts/bash/smart_flip/awq/run_mistral.sh
 ```
 
-Hoac override model:
+Or override the model:
 
 ```bash
 MODEL_PATH=meta-llama/Meta-Llama-3-8B \
@@ -319,30 +320,30 @@ MODELS_ROOT=/models \
 bash scripts/bash/smart_flip/awq/run_llama3.sh
 ```
 
-### Script `smart_flip/awq`
+### `smart_flip/awq` scripts
 
-Script se:
+The script will:
 
-1. chay `float_model`
-2. chay `awq raw`
-3. quet grid `knee_tolerance` x `max_flip_percent` cho `smart_flip`
+1. run `float_model`
+2. run `awq raw`
+3. sweep the `knee_tolerance` x `max_flip_percent` grid for `smart_flip`
 
-Vi du:
+Example:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
 bash scripts/bash/smart_flip/awq/run_mistral.sh
 ```
 
-### Script `bias_correction/awq`
+### `bias_correction/awq` scripts
 
-Script se:
+The script will:
 
-1. tuy chon chay `float_model`
-2. chay `awq raw`
-3. chay `awq + bias_correction`
+1. optionally run `float_model`
+2. run `awq raw`
+3. run `awq + bias_correction`
 
-Vi du:
+Example:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
@@ -350,23 +351,23 @@ BIAS_CORRECTION_SAMPLES=4096 \
 bash scripts/bash/bias_correction/awq/run_mistral.sh
 ```
 
-### Script `smart_flip/flatquant`
+### `smart_flip/flatquant` scripts
 
-Script se:
+The script will:
 
-1. tuy chon chay `float_model`
-2. tuy chon chay `flatquant raw`
-3. neu bo qua raw thi doc lai `RAW_MODEL_DIR`
-4. chay `flatquant + smart_flip` voi `--flatquant-raw-path "$RAW_MODEL_DIR"`
+1. optionally run `float_model`
+2. optionally run `flatquant raw`
+3. if raw is skipped, reuse `RAW_MODEL_DIR`
+4. run `flatquant + smart_flip` with `--flatquant-raw-path "$RAW_MODEL_DIR"`
 
-Vi du:
+Example:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
 bash scripts/bash/smart_flip/flatquant/run_mistral.sh
 ```
 
-Neu da co raw artifact roi:
+If you already have a raw artifact:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
@@ -375,16 +376,16 @@ RAW_MODEL_DIR=./results/models/flatquant_raw/flatquant_raw_Mistral-7B-v0.3 \
 bash scripts/bash/smart_flip/flatquant/run_mistral.sh
 ```
 
-### Script `bias_correction/flatquant`
+### `bias_correction/flatquant` scripts
 
-Tuong tu, script nay dung raw FlatQuant truoc roi moi chay correction:
+Similarly, this script produces a raw FlatQuant artifact first, then runs correction:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
 bash scripts/bash/bias_correction/flatquant/run_mistral.sh
 ```
 
-Hoac tai su dung raw artifact:
+Or reuse a raw artifact:
 
 ```bash
 MODEL_PATH=mistralai/Mistral-7B-v0.3 \
@@ -393,9 +394,9 @@ RAW_MODEL_DIR=./results/models/flatquant_raw/flatquant_raw_Mistral-7B-v0.3 \
 bash scripts/bash/bias_correction/flatquant/run_mistral.sh
 ```
 
-### Bien moi truong pho bien cho `.sh`
+### Common environment variables for `.sh`
 
-Tat ca wrapper script deu ho tro cac bien moi truong nay:
+All wrapper scripts support these environment variables:
 
 - `MODEL_PATH`
 - `MODELS_ROOT`
@@ -418,7 +419,7 @@ Tat ca wrapper script deu ho tro cac bien moi truong nay:
 - `WANDB_PROJECT`
 - `WANDB_ENTITY`
 
-FlatQuant wrapper con co them:
+FlatQuant wrappers additionally support:
 
 - `RUN_FLOAT_MODEL`
 - `RUN_RAW_QUANTIZE`
@@ -433,42 +434,42 @@ FlatQuant wrapper con co them:
 - `FLATQUANT_LWC`
 - `FLATQUANT_LAC`
 
-## Output duoc tao ra o dau
+## Testing
 
-- model artifact: `results/models/<variant>/<run_name>/`
-- evaluation JSON: `results/eval/<run_name>.json`
-- metadata model: `results/models/<variant>/<run_name>/metadata.json`
-
-Luu y:
-
-- voi `flatquant` + `post_correction=none`, raw output duoc giu lai de cac correction stage co the tai su dung
-- mot so quantized output tam co the bi xoa sau evaluation neu pipeline khong can giu no lai
-
-## Kiem thu
-
-Repo dung `unittest`, chay qua `pytest`:
+The repo uses `unittest`, run via `pytest`:
 
 ```bash
-# Toan bo test
+# Full suite
 python -m pytest tests/ -v
 
-# Mot file
+# A single file
 python -m pytest tests/test_quantization_pipeline.py -v
 
-# Mot test
+# A single test
 python -m pytest tests/test_main.py::ParserModeTests::test_parser_accepts_single_model_modes -v
 ```
 
-Cac file test chinh:
+Key test files:
 
-- `tests/test_main.py`: parser CLI va luong `run_quantize`
-- `tests/test_quantization_pipeline.py`: factory pipeline va config (AWQ, FlatQuant, post-correction)
-- `tests/test_bash_scripts.py`: kiem tra layout va noi dung cac wrapper `.sh`
-- `tests/test_flatquant_*.py`, `tests/test_lm_eval_runner.py`: tich hop FlatQuant va lm-eval
+- `tests/test_main.py`: CLI parser and the `run_quantize` flow
+- `tests/test_quantization_pipeline.py`: pipeline factory and config (AWQ, FlatQuant, post-correction)
+- `tests/test_bash_scripts.py`: layout and content checks for the `.sh` wrappers
+- `tests/test_flatquant_*.py`, `tests/test_lm_eval_runner.py`: FlatQuant and lm-eval integration
 
-## Ghi chu
+## Output locations
 
-- `smart_flip` va `bias_correction` deu la post-correction stage.
-- `flatquant` can dataset local day du hon `awq`, nhat la khi chay qua luong evaluation/loader cua FlatQuant.
-- Neu ban gap loi dataset khi chay FlatQuant, hay kiem tra truoc `smart-flip/datasets`.
-- Cac script trong `legacy/` duoc giu lai de doi chieu, khong phai la luong van hanh chinh nua.
+- model artifacts: `results/models/<variant>/<run_name>/`
+- evaluation JSON: `results/eval/<run_name>.json`
+- model metadata: `results/models/<variant>/<run_name>/metadata.json`
+
+Notes:
+
+- for `flatquant` + `post_correction=none`, the raw output is retained so correction stages can reuse it
+- some temporary quantized outputs may be deleted after evaluation if the pipeline does not need to keep them
+
+## Notes
+
+- `smart_flip` and `bias_correction` are both post-correction stages.
+- `flatquant` needs more complete local datasets than `awq`, especially when running through the FlatQuant evaluation/loader flow.
+- If you hit dataset errors while running FlatQuant, check `smart-flip/datasets` first.
+- The scripts under `legacy/` are kept for reference and are no longer part of the main flow.
